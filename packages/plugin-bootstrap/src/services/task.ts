@@ -262,10 +262,8 @@ export class TaskService extends Service {
       if (task.tags?.includes('repeat')) {
         // For repeating tasks, update the updatedAt timestamp
         await this.runtime.updateTask(task.id, {
-          metadata: {
-            ...task.metadata,
-            updatedAt: Date.now(),
-          },
+          updatedAt: Date.now(),
+          metadata: task.metadata,
         });
         logger.debug(
           `[Bootstrap] Updated repeating task ${task.name} (${task.id}) with new timestamp`
