@@ -3,6 +3,7 @@ import { type Plugin, type IAgentRuntime, logger } from '@elizaos/core';
 import * as actions from './actions/index.ts';
 import * as providers from './providers/index.ts';
 import {
+  SentimentPersistenceService,
   SentimentAnalysisService,
   RapidAPIDataService,
   SentimentAggregatorService,
@@ -37,13 +38,14 @@ export const sentimentAnalyzerPlugin: Plugin = {
   // Services that handle the core functionality
   services: [
     StartupService, // Must be first to initialize tasks
+    SentimentPersistenceService, // Must be second to provide storage foundation
     SentimentAnalysisService,
     RapidAPIDataService, // Real Twitter data via RapidAPI
     SentimentAggregatorService,
   ],
 
   // Actions that users can trigger
-  actions: [actions.sentimentReportAction],
+  actions: [actions.sentimentReportAction, actions.processSentimentAction],
 
   // Providers that supply context to conversations
   providers: [

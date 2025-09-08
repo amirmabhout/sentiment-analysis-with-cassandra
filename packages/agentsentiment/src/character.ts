@@ -14,7 +14,7 @@ export const character: Character = {
     '@elizaos/plugin-sentiment-analyzer',
     '@elizaos/plugin-bootstrap',
     '@elizaos/plugin-google-genai',
-    '@elizaos/plugin-discord'
+    '@elizaos/plugin-discord',
   ],
   settings: {},
   system:

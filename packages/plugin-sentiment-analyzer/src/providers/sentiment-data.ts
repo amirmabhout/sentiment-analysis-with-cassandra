@@ -5,6 +5,7 @@ import {
   type Memory,
   type State,
   logger,
+  ModelType,
 } from '@elizaos/core';
 
 /**
@@ -220,7 +221,7 @@ export const sentimentTrendsProvider: Provider = {
       // Get recent memories containing trend analysis
       const trendMemories = await runtime.searchMemories({
         tableName: 'messages',
-        embedding: (await runtime.useModel('text-embedding-3-small', {
+        embedding: (await runtime.useModel(ModelType.TEXT_EMBEDDING, {
           text: 'sentiment trend analysis weekly report',
         })) as number[],
         match_threshold: 0.8,

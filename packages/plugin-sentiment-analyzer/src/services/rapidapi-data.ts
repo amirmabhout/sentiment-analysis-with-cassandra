@@ -18,9 +18,9 @@ export class RapidAPIDataService extends Service {
   private lastCursor: string | null = null;
 
   // RapidAPI configuration
-  private rapidApiKey: string;
+  private rapidApiKey: string = '';
   private rapidApiHost: string = 'twitter241.p.rapidapi.com';
-  private rapidApiAppName: string;
+  private rapidApiAppName: string = '';
 
   constructor(runtime: IAgentRuntime) {
     super(runtime);
@@ -84,7 +84,7 @@ export class RapidAPIDataService extends Service {
     logger.info(
       `RapidAPI Data Config - Watch terms: ${this.watchTerms.join(', ')}, Max tweets: ${this.maxTweetsPerCycle}, Host: ${this.rapidApiHost}`
     );
-    
+
     // In development, start with a clean slate for better testing
     if (process.env.NODE_ENV === 'development') {
       logger.info('Development mode: Starting with cleared processed tweet cache');
@@ -99,7 +99,9 @@ export class RapidAPIDataService extends Service {
   async fetchRecentTweets(sinceTimestamp?: number): Promise<SocialMediaPost[]> {
     const cutoffTimestamp = this.calculateCutoffTimestamp(sinceTimestamp);
 
-    logger.info(`Fetching tweets since ${new Date(cutoffTimestamp).toISOString()} via RapidAPI (${process.env.NODE_ENV || 'production'} mode)`);
+    logger.info(
+      `Fetching tweets since ${new Date(cutoffTimestamp).toISOString()} via RapidAPI (${process.env.NODE_ENV || 'production'} mode)`
+    );
 
     try {
       const allPosts: SocialMediaPost[] = [];
@@ -144,18 +146,20 @@ export class RapidAPIDataService extends Service {
    */
   private calculateCutoffTimestamp(sinceTimestamp?: number): number {
     const isDevelopment = process.env.NODE_ENV === 'development';
-    
+
     if (isDevelopment) {
       // Development: Use longer time window to ensure data availability for testing
       const devTimeWindow = parseInt(
-        process.env.SENTIMENT_DEV_TIME_WINDOW || '21600000', // 6 hours default
+        process.env.SENTIMENT_DEV_TIME_WINDOW || '216000000', // 60 hours default
         10
       );
       const cutoff = Date.now() - devTimeWindow;
-      logger.debug(`Development mode: Using relaxed cutoff timestamp (${devTimeWindow / 1000 / 60 / 60} hours ago)`);
+      logger.debug(
+        `Development mode: Using relaxed cutoff timestamp (${devTimeWindow / 1000 / 60 / 60} hours ago)`
+      );
       return cutoff;
     }
-    
+
     // Production: Use proper incremental processing
     const cutoff = sinceTimestamp || this.lastFetchTimestamp || Date.now() - 10 * 60 * 1000;
     logger.debug('Production mode: Using incremental processing cutoff timestamp');
@@ -204,11 +208,9 @@ export class RapidAPIDataService extends Service {
     }
 
     const data = await response.json();
-    logger.debug('RapidAPI response received', {
-      hasCursor: !!data.cursor,
-      hasResult: !!data.result,
-      hasTimeline: !!data.result?.timeline,
-    });
+    logger.debug(
+      `RapidAPI response received - hasCursor: ${!!data.cursor}, hasResult: ${!!data.result}, hasTimeline: ${!!data.result?.timeline}`
+    );
 
     // Update cursor for next request
     if (data.cursor?.bottom) {
@@ -290,7 +292,7 @@ export class RapidAPIDataService extends Service {
             );
           }
         } catch (error) {
-          logger.warn(`Failed to transform entry ${entry.entryId}:`, error);
+          logger.warn(`Failed to transform entry ${entry.entryId}:`, String(error));
         }
       }
 
@@ -301,7 +303,7 @@ export class RapidAPIDataService extends Service {
           `Skipped: ${cursorEntries} cursors, ${nonTweetEntries} non-tweets.`
       );
     } catch (error) {
-      logger.error(`Error transforming Twitter API response for ${searchTerm}:`, error);
+      logger.error(`Error transforming Twitter API response for ${searchTerm}:`, String(error));
     }
 
     logger.info(`Transformed ${posts.length} posts for term: ${searchTerm}`);
@@ -371,15 +373,17 @@ export class RapidAPIDataService extends Service {
 
       // Skip if too old (only if we have a valid timestamp)
       if (timestamp && timestamp < cutoffTimestamp) {
-        logger.debug(
-          `Tweet too old, skipping: ${tweetId}, timestamp: ${new Date(timestamp).toISOString()}`
+        logger.info(
+          `Tweet too old, skipping: ${tweetId}, tweet time: ${new Date(timestamp).toISOString()}, cutoff: ${new Date(cutoffTimestamp).toISOString()}`
         );
         return null;
       }
 
       // Skip if already processed
       if (this.processedTweetIds.has(tweetId)) {
-        logger.debug(`Tweet already processed, skipping: ${tweetId}`);
+        logger.info(
+          `Tweet already processed, skipping: ${tweetId} (${this.processedTweetIds.size} total processed tweets in cache)`
+        );
         return null;
       }
 
@@ -506,14 +510,16 @@ export class RapidAPIDataService extends Service {
         timestamp: finalTimestamp,
         conversationId:
           tweet.legacy?.conversation_id_str || tweet.conversation_id || `conv_${tweetId}`,
-        searchContext: searchTerm, // Tag the post with the search term it was fetched for
+        searchContext: searchTerm, // Keep for backward compatibility
+        searchTerms: [searchTerm], // Initialize with the search term that found this post
+        attributionSource: 'search', // This post was found via search
       };
 
       this.processedTweetIds.add(tweetId);
       logger.debug(`Tweet ${tweetId} processed successfully for term: ${searchTerm}`);
       return post;
     } catch (error) {
-      logger.warn(`Error transforming tweet entry ${entry.entryId}:`, error);
+      logger.warn(`Error transforming tweet entry ${entry.entryId}:`, String(error));
       return null;
     }
   }
@@ -535,17 +541,87 @@ export class RapidAPIDataService extends Service {
   }
 
   /**
-   * Remove duplicate posts based on ID
+   * Remove duplicate posts based on ID while merging attribution data
+   * This handles cases where the same post is found by multiple search terms
    */
   private deduplicatePosts(posts: SocialMediaPost[]): SocialMediaPost[] {
-    const seen = new Set<string>();
-    return posts.filter((post) => {
-      if (seen.has(post.id)) {
-        return false;
+    const postMap = new Map<string, SocialMediaPost>();
+
+    for (const post of posts) {
+      const existingPost = postMap.get(post.id);
+
+      if (existingPost) {
+        // Merge search terms and contexts from duplicate posts
+        const mergedPost = this.mergePostAttributions(existingPost, post);
+        postMap.set(post.id, mergedPost);
+
+        logger.info(
+          `[DEDUPLICATION] Merged attributions for post ${post.id}: ` +
+            `${JSON.stringify(existingPost.searchTerms || [existingPost.searchContext])} + ` +
+            `${JSON.stringify(post.searchTerms || [post.searchContext])} = ` +
+            `${JSON.stringify(mergedPost.searchTerms)}`
+        );
+      } else {
+        // First time seeing this post - ensure it has proper searchTerms array
+        const initializedPost = {
+          ...post,
+          searchTerms: post.searchTerms || (post.searchContext ? [post.searchContext] : []),
+          attributionSource: post.attributionSource || ('search' as const),
+        };
+        postMap.set(post.id, initializedPost);
       }
-      seen.add(post.id);
-      return true;
-    });
+    }
+
+    const deduplicated = Array.from(postMap.values());
+
+    // Enhanced logging for deduplication results
+    logger.info(
+      `[DEDUPLICATION] Processed ${posts.length} posts → ${deduplicated.length} unique posts ` +
+        `(${posts.length - deduplicated.length} duplicates merged)`
+    );
+
+    // Log attribution distribution after deduplication
+    const attributionCounts = new Map<string, number>();
+    for (const post of deduplicated) {
+      for (const term of post.searchTerms || []) {
+        attributionCounts.set(term, (attributionCounts.get(term) || 0) + 1);
+      }
+    }
+
+    logger.info(
+      `[DEDUPLICATION] Final attribution distribution: ` +
+        `${Array.from(attributionCounts.entries())
+          .map(([term, count]) => `${term}:${count}`)
+          .join(', ')}`
+    );
+
+    return deduplicated;
+  }
+
+  /**
+   * Merge attribution data from duplicate posts
+   */
+  private mergePostAttributions(
+    existingPost: SocialMediaPost,
+    newPost: SocialMediaPost
+  ): SocialMediaPost {
+    // Collect all search terms from both posts
+    const existingTerms =
+      existingPost.searchTerms || (existingPost.searchContext ? [existingPost.searchContext] : []);
+    const newTerms = newPost.searchTerms || (newPost.searchContext ? [newPost.searchContext] : []);
+
+    // Merge and deduplicate search terms
+    const allTerms = [...existingTerms, ...newTerms];
+    const uniqueTerms = [...new Set(allTerms.filter((term) => term && term.trim()))];
+
+    // Keep the existing post as base, but update attribution data
+    return {
+      ...existingPost,
+      searchTerms: uniqueTerms,
+      attributionSource: 'search', // Multi-term posts are always from search
+      // Keep the original searchContext for backward compatibility
+      searchContext: existingPost.searchContext || newPost.searchContext,
+    };
   }
 
   /**
@@ -615,7 +691,7 @@ export class RapidAPIDataService extends Service {
       lastCursor: this.lastCursor,
     };
   }
-  
+
   /**
    * Clear the processed tweets cache - useful for development and testing
    */
@@ -623,7 +699,7 @@ export class RapidAPIDataService extends Service {
     const previousSize = this.processedTweetIds.size;
     this.processedTweetIds.clear();
     logger.info(`Cleared processed tweet cache (was ${previousSize} tweets)`);
-    
+
     if (process.env.NODE_ENV === 'development') {
       logger.info('Development mode: Processed tweet cache cleared for fresh testing');
     }

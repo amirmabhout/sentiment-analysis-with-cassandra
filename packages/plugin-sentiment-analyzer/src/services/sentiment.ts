@@ -6,6 +6,7 @@ import type {
   ExtractedEntity,
   ExtractedTopic,
 } from '../types.ts';
+import type { SentimentPersistenceService } from './persistence.ts';
 
 /**
  * SentimentAnalysisService handles the core sentiment scoring functionality
@@ -16,9 +17,15 @@ export class SentimentAnalysisService extends Service {
   capabilityDescription = 'Analyzes sentiment of social media posts and text content';
 
   private watchTerms: string[] = ['ai16z', 'elizaos', 'eliza', '@ai16zdao', '@elizaos'];
+  private persistenceService: SentimentPersistenceService;
 
   constructor(runtime: IAgentRuntime) {
     super(runtime);
+
+    // Get persistence service
+    this.persistenceService = runtime.getService(
+      'sentiment-persistence'
+    ) as SentimentPersistenceService;
 
     // Load watch terms from environment or runtime settings
     const envWatchTerms =
@@ -44,38 +51,92 @@ export class SentimentAnalysisService extends Service {
 
   /**
    * Analyzes sentiment of a single social media post
+   * Stores both the original post and the analysis results in the database
    */
-  async analyzeSentiment(post: SocialMediaPost, searchContext?: string): Promise<ProcessedSentiment> {
-    // Use search context from post or parameter
-    const effectiveSearchContext = searchContext || post.searchContext;
-    logger.debug(`Analyzing sentiment for post ${post.id} from ${post.platform}${effectiveSearchContext ? ` (context: ${effectiveSearchContext})` : ''}`);
+  async analyzeSentiment(
+    post: SocialMediaPost,
+    searchContext?: string
+  ): Promise<ProcessedSentiment> {
+    logger.debug(
+      `[SENTIMENT_ANALYSIS] Starting analysis for post ${post.id} from ${post.platform}`
+    );
+    logger.debug(
+      `[SENTIMENT_ANALYSIS] Post search attribution: searchTerms=${JSON.stringify(post.searchTerms)}, searchContext=${post.searchContext}, source=${post.attributionSource}`
+    );
+
+    // Store the tweet first (with deduplication)
+    let tweetMemoryId = null;
+    if (this.persistenceService) {
+      try {
+        tweetMemoryId = await this.persistenceService.storeTweet(post);
+        if (tweetMemoryId) {
+          logger.debug(
+            `[SENTIMENT_ANALYSIS] Stored tweet ${post.id} with memory ID ${tweetMemoryId}`
+          );
+        } else {
+          logger.debug(`[SENTIMENT_ANALYSIS] Tweet ${post.id} already exists in database`);
+        }
+      } catch (error) {
+        logger.warn(`[SENTIMENT_ANALYSIS] Failed to store tweet ${post.id}:`, error);
+      }
+    } else {
+      logger.warn('[SENTIMENT_ANALYSIS] Persistence service not available for tweet storage');
+    }
 
     try {
-      // Check if post contains watch terms
-      const watchTermsFound = this.findWatchTerms(post.content.text);
+      let watchTermsFound: string[] = [];
 
-      // If we fetched this post by searching for specific terms, it's automatically relevant
-      // Even if the exact term doesn't appear in the text (could be in hashtags, mentions, etc.)
-      if (watchTermsFound.length === 0) {
+      // STEP 1: Use search terms as primary attribution (highest priority)
+      if (post.searchTerms && post.searchTerms.length > 0) {
+        watchTermsFound.push(...post.searchTerms);
         logger.debug(
-          `Post ${post.id} doesn't contain exact watch terms but was fetched via search - using context attribution`
+          `[SENTIMENT_ANALYSIS] Primary attribution from searchTerms: [${watchTermsFound.join(', ')}]`
         );
-        
-        if (effectiveSearchContext) {
-          // Post was fetched for specific term - use that search context
-          logger.debug(`Using search context '${effectiveSearchContext}' for post ${post.id}`);
-          watchTermsFound.push(effectiveSearchContext);
-        } else {
-          // Try to infer from post metadata (URLs, usernames, hashtags, etc.)
-          const inferredWatchTerms = this.inferWatchTermsFromPost(post);
-          if (inferredWatchTerms.length === 0) {
-            // Only use ai16z fallback if no other matches found and no search context
-            logger.debug(`No context or inference possible, using default fallback for post ${post.id}`);
-            inferredWatchTerms.push(this.watchTerms[0] || 'ai16z');
-          }
-          watchTermsFound.push(...inferredWatchTerms);
+      } else if (post.searchContext) {
+        // Backward compatibility - use searchContext if searchTerms not available
+        watchTermsFound.push(post.searchContext);
+        logger.debug(
+          `[SENTIMENT_ANALYSIS] Primary attribution from searchContext: [${post.searchContext}]`
+        );
+      }
+
+      // STEP 2: Add secondary attribution via text analysis
+      const textBasedTerms = this.findWatchTerms(post.content.text);
+      if (textBasedTerms.length > 0) {
+        // Add any additional terms found via text analysis that aren't already included
+        const newTerms = textBasedTerms.filter((term) => !watchTermsFound.includes(term));
+        if (newTerms.length > 0) {
+          watchTermsFound.push(...newTerms);
+          logger.debug(
+            `[SENTIMENT_ANALYSIS] Secondary attribution from text analysis: [${newTerms.join(', ')}]`
+          );
         }
       }
+
+      // STEP 3: Try inference if we still have no attributions
+      if (watchTermsFound.length === 0) {
+        logger.debug(
+          `[SENTIMENT_ANALYSIS] No primary or secondary attribution found, attempting inference`
+        );
+        const inferredTerms = this.inferWatchTermsFromPost(post);
+        if (inferredTerms.length > 0) {
+          watchTermsFound.push(...inferredTerms);
+          logger.debug(`[SENTIMENT_ANALYSIS] Inference attribution: [${inferredTerms.join(', ')}]`);
+        } else {
+          // Last resort: use default term
+          const defaultTerm = this.watchTerms[0] || 'ai16z';
+          watchTermsFound.push(defaultTerm);
+          logger.debug(
+            `[SENTIMENT_ANALYSIS] Fallback attribution to default term: [${defaultTerm}]`
+          );
+        }
+      }
+
+      // Remove duplicates and clean up
+      watchTermsFound = [...new Set(watchTermsFound.filter((term) => term && term.trim()))];
+      logger.debug(
+        `[SENTIMENT_ANALYSIS] Final attribution for post ${post.id}: [${watchTermsFound.join(', ')}]`
+      );
 
       // Analyze sentiment using LLM
       const sentiment = await this.scoreSentiment(post.content.text);
@@ -87,7 +148,7 @@ export class SentimentAnalysisService extends Service {
       // Calculate influence metrics
       const influence = this.calculateInfluence(post);
 
-      return {
+      const processedSentiment: ProcessedSentiment = {
         postId: post.id,
         platform: post.platform,
         processedAt: Date.now(),
@@ -97,17 +158,55 @@ export class SentimentAnalysisService extends Service {
         watchTermsFound,
         influence,
       };
+
+      // Store the sentiment analysis results
+      if (this.persistenceService) {
+        try {
+          const analysisMemoryId = await this.persistenceService.storeSentimentAnalysis(
+            processedSentiment,
+            tweetMemoryId
+          );
+          if (analysisMemoryId) {
+            logger.debug(
+              `[SENTIMENT_ANALYSIS] Stored sentiment analysis ${post.id} with memory ID ${analysisMemoryId}`
+            );
+          }
+        } catch (error) {
+          logger.warn(`[SENTIMENT_ANALYSIS] Failed to store sentiment analysis ${post.id}:`, error);
+        }
+      }
+
+      return processedSentiment;
     } catch (error) {
       logger.error(`Error analyzing sentiment for post ${post.id}:`, error);
-      return this.createEmptyResult(post, []);
+      const emptyResult = this.createEmptyResult(post, []);
+
+      // Still try to store the empty result if we have persistence service
+      if (this.persistenceService && tweetMemoryId) {
+        try {
+          await this.persistenceService.storeSentimentAnalysis(emptyResult, tweetMemoryId);
+        } catch (storeError) {
+          logger.warn(
+            `[SENTIMENT_ANALYSIS] Failed to store empty result for ${post.id}:`,
+            storeError
+          );
+        }
+      }
+
+      return emptyResult;
     }
   }
 
   /**
    * Batch process sentiment analysis for multiple posts
+   * Stores all posts and analysis results in the database
    */
   async analyzeBatch(posts: SocialMediaPost[]): Promise<ProcessedSentiment[]> {
     logger.info(`Batch analyzing sentiment for ${posts.length} posts`);
+
+    if (!this.persistenceService) {
+      logger.warn('[SENTIMENT_ANALYSIS] Persistence service not available for batch processing');
+    }
 
     const results: ProcessedSentiment[] = [];
     const batchSize = 5; // Process in smaller batches to avoid rate limits
@@ -120,6 +219,16 @@ export class SentimentAnalysisService extends Service {
         const batchResults = await Promise.all(batchPromises);
         results.push(...batchResults);
 
+        // Log batch completion details
+        logger.info(
+          `Completed batch ${Math.floor(i / batchSize) + 1}: analyzed ${batchResults.length} posts`
+        );
+        for (const result of batchResults) {
+          logger.info(
+            `Post ${result.postId}: attributed to [${result.watchTermsFound.join(', ')}], sentiment: ${result.sentiment.score.toFixed(3)}`
+          );
+        }
+
         // Small delay between batches to be respectful to LLM API
         if (i + batchSize < posts.length) {
           await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -130,7 +239,60 @@ export class SentimentAnalysisService extends Service {
       }
     }
 
-    logger.info(`Completed batch analysis: ${results.length} results`);
+    logger.info(`[BATCH_ANALYSIS] Completed batch analysis: ${results.length} results`);
+
+    // Enhanced attribution summary with details
+    const attributionSummary = new Map<string, number>();
+    const multiAttributedPosts = [];
+    let storedInDb = 0;
+
+    for (const result of results) {
+      if (result.watchTermsFound.length > 1) {
+        multiAttributedPosts.push({
+          postId: result.postId,
+          terms: result.watchTermsFound,
+        });
+      }
+
+      for (const term of result.watchTermsFound) {
+        attributionSummary.set(term, (attributionSummary.get(term) || 0) + 1);
+      }
+    }
+
+    logger.info(
+      `[BATCH_ANALYSIS] Attribution summary: ${Array.from(attributionSummary.entries())
+        .map(([term, count]) => `${term}:${count}`)
+        .join(', ')}`
+    );
+
+    if (multiAttributedPosts.length > 0) {
+      logger.info(
+        `[BATCH_ANALYSIS] Posts with multiple attributions (${multiAttributedPosts.length}): ${multiAttributedPosts
+          .map((p) => `${p.postId}:[${p.terms.join(',')}]`)
+          .slice(0, 5)
+          .join(', ')}${multiAttributedPosts.length > 5 ? '...' : ''}`
+      );
+    }
+
+    // Log total attribution count vs posts processed
+    const totalAttributions = Array.from(attributionSummary.values()).reduce(
+      (sum, count) => sum + count,
+      0
+    );
+    logger.info(
+      `[BATCH_ANALYSIS] Total attributions: ${totalAttributions} across ${results.length} posts (${(totalAttributions / results.length).toFixed(2)} avg per post)`
+    );
+
+    if (this.persistenceService) {
+      logger.info(
+        `[BATCH_ANALYSIS] All ${results.length} posts and sentiment analyses stored in database`
+      );
+    } else {
+      logger.warn(
+        '[BATCH_ANALYSIS] Results processed but persistence service unavailable - data not stored'
+      );
+    }
+
     return results;
   }
 
@@ -395,16 +557,16 @@ Maximum 3 most important topics.`;
   private findWatchTerms(text: string): string[] {
     const lowerText = text.toLowerCase();
     const matchedTerms: string[] = [];
-    
+
     for (const term of this.watchTerms) {
       const termLower = term.toLowerCase();
-      
+
       // Direct match (existing logic)
       if (lowerText.includes(termLower)) {
         matchedTerms.push(term);
         continue;
       }
-      
+
       // Enhanced matching for common variations
       const variations = this.generateTermVariations(termLower);
       for (const variation of variations) {
@@ -414,36 +576,36 @@ Maximum 3 most important topics.`;
         }
       }
     }
-    
+
     return [...new Set(matchedTerms)]; // Remove duplicates
   }
-  
+
   /**
    * Generate common variations of a watch term for better matching
    */
   private generateTermVariations(term: string): string[] {
     const variations = [term]; // Include the original term
-    
+
     // Add hashtag and ticker symbol versions
     variations.push(`#${term}`);
     variations.push(`$${term}`);
     variations.push(`@${term}`);
-    
+
     // Add case variations if not all lowercase
     if (term !== term.toLowerCase()) {
       variations.push(term.toUpperCase());
       variations.push(term.charAt(0).toUpperCase() + term.slice(1).toLowerCase());
     }
-    
+
     // Add common patterns for specific terms
     if (term === 'elizaos') {
       variations.push('eliza os', 'eliza-os', 'elizaOS', 'ElizaOS', 'ELIZAOS');
     }
-    
+
     if (term === 'ai16z') {
       variations.push('AI16Z', 'ai16z', 'AI16z');
     }
-    
+
     // Add space-separated version for compound terms
     if (term.length > 4 && !term.includes(' ')) {
       // Try to split camelCase or add spaces
@@ -452,7 +614,7 @@ Maximum 3 most important topics.`;
         variations.push(spaced);
       }
     }
-    
+
     return variations;
   }
 

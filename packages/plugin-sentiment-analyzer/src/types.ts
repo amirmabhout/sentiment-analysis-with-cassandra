@@ -57,7 +57,9 @@ export interface SocialMediaPost {
   };
   timestamp: number;
   conversationId?: string;
-  searchContext?: string; // The search term this post was fetched for
+  searchContext?: string; // DEPRECATED: Use searchTerms instead
+  searchTerms?: string[]; // All search terms that found this post
+  attributionSource?: 'search' | 'text_analysis' | 'inference'; // How the attribution was determined
 }
 
 /**

@@ -7,6 +7,7 @@ import type {
   ExtractedTopic,
   SentimentScore,
 } from '../types.ts';
+import type { SentimentPersistenceService } from './persistence.ts';
 
 /**
  * SentimentAggregatorService handles aggregation and analysis of processed sentiment data
@@ -16,19 +17,13 @@ export class SentimentAggregatorService extends Service {
   static serviceType = 'sentiment-aggregator';
   capabilityDescription = 'Aggregates sentiment data and generates insights and reports';
 
-  private sentimentHistory: ProcessedSentiment[] = [];
-  private maxHistorySize = 10000; // Keep last 10k processed sentiments
+  private persistenceService: SentimentPersistenceService;
 
   constructor(runtime: IAgentRuntime) {
     super(runtime);
-
-    // Load max history size from config
-    const maxSize =
-      (this.runtime.getSetting('SENTIMENT_MAX_HISTORY') as string) ||
-      process.env.SENTIMENT_MAX_HISTORY;
-    if (maxSize) {
-      this.maxHistorySize = parseInt(maxSize, 10) || 10000;
-    }
+    this.persistenceService = runtime.getService(
+      'sentiment-persistence'
+    ) as SentimentPersistenceService;
   }
 
   static async start(runtime: IAgentRuntime): Promise<SentimentAggregatorService> {
@@ -41,18 +36,57 @@ export class SentimentAggregatorService extends Service {
   }
 
   /**
-   * Add new processed sentiment data to the aggregator
+   * Add new processed sentiment data to the aggregator (stores in database)
    */
-  addSentimentData(data: ProcessedSentiment[]): void {
-    this.sentimentHistory.push(...data);
+  async addSentimentData(data: ProcessedSentiment[]): Promise<void> {
+    logger.info(`[AGGREGATOR] Storing ${data.length} sentiment records in database`);
 
-    // Keep only the most recent entries to manage memory
-    if (this.sentimentHistory.length > this.maxHistorySize) {
-      this.sentimentHistory = this.sentimentHistory.slice(-this.maxHistorySize);
+    if (!this.persistenceService) {
+      logger.error('[AGGREGATOR] Persistence service not available');
+      return;
     }
 
-    logger.debug(
-      `Added ${data.length} sentiment records, total history: ${this.sentimentHistory.length}`
+    // Enhanced logging with multi-attribution tracking
+    let multiAttributedCount = 0;
+    let storedCount = 0;
+    const attributionDetails = new Map<string, number>();
+
+    for (const item of data) {
+      if (item.watchTermsFound.length > 1) {
+        multiAttributedCount++;
+      }
+
+      for (const term of item.watchTermsFound) {
+        attributionDetails.set(term, (attributionDetails.get(term) || 0) + 1);
+      }
+
+      logger.info(
+        `[AGGREGATOR] Storing post ${item.postId}: [${item.watchTermsFound.join(', ')}] sentiment=${item.sentiment.score.toFixed(3)}`
+      );
+
+      // Store in database
+      const memoryId = await this.persistenceService.storeSentimentAnalysis(item);
+      if (memoryId) {
+        storedCount++;
+      }
+    }
+
+    logger.info(
+      `[AGGREGATOR] Successfully stored ${storedCount}/${data.length} sentiment analyses in database`
+    );
+
+    // Enhanced watch term distribution logging
+    const totalAttributions = Array.from(attributionDetails.values()).reduce(
+      (sum, count) => sum + count,
+      0
+    );
+    logger.info(
+      `[AGGREGATOR] Added ${data.length} posts with ${totalAttributions} total attributions (${multiAttributedCount} multi-attributed)`
+    );
+    logger.info(
+      `[AGGREGATOR] New data attribution breakdown: ${Array.from(attributionDetails.entries())
+        .map(([term, count]) => `${term}:${count}`)
+        .join(', ')}`
     );
   }
 
@@ -67,19 +101,50 @@ export class SentimentAggregatorService extends Service {
     previousPeriodEnd?: number
   ): Promise<SentimentAggregation> {
     logger.info(
-      `Generating aggregation for '${watchTerm}' from ${new Date(startTime).toISOString()} to ${new Date(endTime).toISOString()}`
+      `[AGGREGATOR] Generating aggregation for '${watchTerm}' from ${new Date(startTime).toISOString()} to ${new Date(endTime).toISOString()}`
     );
 
-    // Filter data for the time window and watch term
-    const relevantData = this.sentimentHistory.filter(
-      (item) =>
-        item.processedAt >= startTime &&
-        item.processedAt <= endTime &&
-        item.watchTermsFound.some((term) => term.toLowerCase().includes(watchTerm.toLowerCase()))
+    if (!this.persistenceService) {
+      logger.error('[AGGREGATOR] Persistence service not available for aggregation');
+      return this.createEmptyAggregation(watchTerm, startTime, endTime);
+    }
+
+    // Check cache first
+    const cacheKey = `sentiment-aggregation-${watchTerm}-${startTime}-${endTime}-${this.runtime.agentId}`;
+    try {
+      const cached = await this.runtime.getCache<SentimentAggregation>(cacheKey);
+      if (cached) {
+        logger.debug(`[AGGREGATOR] Using cached aggregation for '${watchTerm}'`);
+        return cached;
+      }
+    } catch (error) {
+      logger.debug('[AGGREGATOR] Cache lookup failed, proceeding with fresh calculation');
+    }
+
+    // Get data from database instead of in-memory storage
+    const relevantData = await this.persistenceService.getSentimentAnalysisByTimeRange(
+      startTime,
+      endTime,
+      [watchTerm]
     );
+
+    logger.info(
+      `[AGGREGATOR] Retrieved ${relevantData.length} sentiment records for '${watchTerm}' from database`
+    );
+
+    // Log sample of what we found for debugging
+    const sampleSize = Math.min(5, relevantData.length);
+    for (let i = 0; i < sampleSize; i++) {
+      const item = relevantData[i];
+      logger.info(
+        `[AGGREGATOR] Sample post ${item.postId}: watchTerms=[${item.watchTermsFound.join(', ')}], sentiment=${item.sentiment.score.toFixed(3)}, processedAt: ${new Date(item.processedAt).toISOString()}`
+      );
+    }
 
     if (relevantData.length === 0) {
-      logger.info(`No sentiment data found for '${watchTerm}' in the specified time window`);
+      logger.info(
+        `[AGGREGATOR] No sentiment data found for '${watchTerm}' in the specified time window`
+      );
       return this.createEmptyAggregation(watchTerm, startTime, endTime);
     }
 
@@ -139,6 +204,14 @@ export class SentimentAggregatorService extends Service {
       trends,
     };
 
+    // Cache the aggregation for 15 minutes
+    try {
+      await this.runtime.setCache(cacheKey, aggregation, 15 * 60 * 1000);
+      logger.debug(`[AGGREGATOR] Cached aggregation for '${watchTerm}'`);
+    } catch (error) {
+      logger.warn('[AGGREGATOR] Failed to cache aggregation:', error);
+    }
+
     logger.info(
       `Generated aggregation: ${totalPosts} posts, sentiment: ${avgSentiment.toFixed(3)}`
     );
@@ -159,6 +232,11 @@ export class SentimentAggregatorService extends Service {
     const previousEnd = startTime;
 
     logger.info(`Generating ${reportType} report for ${timeframeHours}h period`);
+
+    if (!this.persistenceService) {
+      logger.error('[AGGREGATOR] Persistence service not available for report generation');
+      throw new Error('Persistence service not available');
+    }
 
     // Generate aggregations for each watch term
     const breakdowns: SentimentAggregation[] = [];
@@ -219,6 +297,15 @@ export class SentimentAggregatorService extends Service {
     };
 
     logger.info(`Generated report: ${totalVolume} total posts, ${alerts.length} alerts`);
+
+    // Store the report in database for historical tracking
+    try {
+      await this.persistenceService.storeReport(report);
+      logger.info('[AGGREGATOR] Report stored successfully in database');
+    } catch (error) {
+      logger.warn('[AGGREGATOR] Failed to store report in database:', error);
+    }
+
     return report;
   }
 
@@ -422,12 +509,11 @@ export class SentimentAggregatorService extends Service {
       };
     }
 
-    // Get previous period data
-    const previousData = this.sentimentHistory.filter(
-      (item) =>
-        item.processedAt >= previousStart &&
-        item.processedAt <= previousEnd &&
-        item.watchTermsFound.some((term) => term.toLowerCase().includes(watchTerm.toLowerCase()))
+    // Get previous period data from database
+    const previousData = await this.persistenceService.getSentimentAnalysisByTimeRange(
+      previousStart,
+      previousEnd,
+      [watchTerm]
     );
 
     if (previousData.length === 0) {
@@ -638,17 +724,34 @@ export class SentimentAggregatorService extends Service {
   }
 
   /**
-   * Get current sentiment history size
+   * Get current storage statistics
    */
-  getHistorySize(): number {
-    return this.sentimentHistory.length;
+  async getStorageStats(): Promise<{
+    totalTweets: number;
+    totalSentimentAnalyses: number;
+    totalReports: number;
+    oldestTweet?: Date;
+    newestTweet?: Date;
+  }> {
+    if (!this.persistenceService) {
+      return {
+        totalTweets: 0,
+        totalSentimentAnalyses: 0,
+        totalReports: 0,
+      };
+    }
+    return await this.persistenceService.getStorageStats();
   }
 
   /**
-   * Clear sentiment history (useful for testing)
+   * Clean up old data (useful for maintenance)
    */
-  clearHistory(): void {
-    this.sentimentHistory = [];
-    logger.info('Cleared sentiment history');
+  async cleanupOldData(retentionDays: number = 30): Promise<void> {
+    if (!this.persistenceService) {
+      logger.warn('[AGGREGATOR] Persistence service not available for cleanup');
+      return;
+    }
+    await this.persistenceService.cleanupOldData(retentionDays);
+    logger.info(`[AGGREGATOR] Initiated cleanup of data older than ${retentionDays} days`);
   }
 }

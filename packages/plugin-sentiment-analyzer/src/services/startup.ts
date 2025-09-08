@@ -57,9 +57,9 @@ export class StartupService extends Service {
           roomId: this.runtime.agentId,
           metadata: {
             updatedAt: Date.now(),
-            updateInterval: processingInterval, // Check at the same interval as processing
-            actualProcessingInterval: processingInterval, // Process at this interval
-            lastProcessedTimestamp: Date.now() - processingInterval,
+            updateInterval: processingInterval,
+            actualProcessingInterval: processingInterval,
+            lastProcessedTimestamp: Date.now() - processingInterval, // Standard interval-based timing
             watchTerms: (
               (this.runtime.getSetting('SENTIMENT_WATCH_TERMS') as string) ||
               process.env.SENTIMENT_WATCH_TERMS ||

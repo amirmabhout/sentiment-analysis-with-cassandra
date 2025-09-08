@@ -4,6 +4,7 @@
     "outDir": "./dist",
     "rootDir": "./src",
     "types": ["node", "bun"],
+    "lib": ["ES2022", "DOM"],
     "noEmit": false,
     "emitDeclarationOnly": true,
     "composite": false,
