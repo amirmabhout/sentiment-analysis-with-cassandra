@@ -1,10 +1,10 @@
 import { Service, type IAgentRuntime, logger, ModelType } from '@elizaos/core';
-import type { 
-  SentimentScore, 
-  SocialMediaPost, 
-  ProcessedSentiment, 
-  ExtractedEntity, 
-  ExtractedTopic 
+import type {
+  SentimentScore,
+  SocialMediaPost,
+  ProcessedSentiment,
+  ExtractedEntity,
+  ExtractedTopic,
 } from '../types.ts';
 
 /**
@@ -15,19 +15,14 @@ export class SentimentAnalysisService extends Service {
   static serviceType = 'sentiment-analysis';
   capabilityDescription = 'Analyzes sentiment of social media posts and text content';
 
-  private watchTerms: string[] = [
-    'ai16z', 
-    'elizaos', 
-    'eliza', 
-    '@ai16zdao', 
-    '@elizaos'
-  ];
+  private watchTerms: string[] = ['ai16z', 'elizaos', 'eliza', '@ai16zdao', '@elizaos'];
 
   constructor(runtime: IAgentRuntime) {
     super(runtime);
-    
+
     // Load watch terms from environment or runtime settings
-    const envWatchTerms = runtime.getSetting('SENTIMENT_WATCH_TERMS') as string || process.env.SENTIMENT_WATCH_TERMS;
+    const envWatchTerms =
+      (runtime.getSetting('SENTIMENT_WATCH_TERMS') as string) || process.env.SENTIMENT_WATCH_TERMS;
     if (envWatchTerms) {
       try {
         this.watchTerms = envWatchTerms.split(',').map((term: string) => term.trim().toLowerCase());
@@ -50,21 +45,41 @@ export class SentimentAnalysisService extends Service {
   /**
    * Analyzes sentiment of a single social media post
    */
-  async analyzeSentiment(post: SocialMediaPost): Promise<ProcessedSentiment> {
-    logger.debug(`Analyzing sentiment for post ${post.id} from ${post.platform}`);
+  async analyzeSentiment(post: SocialMediaPost, searchContext?: string): Promise<ProcessedSentiment> {
+    // Use search context from post or parameter
+    const effectiveSearchContext = searchContext || post.searchContext;
+    logger.debug(`Analyzing sentiment for post ${post.id} from ${post.platform}${effectiveSearchContext ? ` (context: ${effectiveSearchContext})` : ''}`);
 
     try {
       // Check if post contains watch terms
       const watchTermsFound = this.findWatchTerms(post.content.text);
-      
+
+      // If we fetched this post by searching for specific terms, it's automatically relevant
+      // Even if the exact term doesn't appear in the text (could be in hashtags, mentions, etc.)
       if (watchTermsFound.length === 0) {
-        logger.debug(`Post ${post.id} doesn't contain watch terms, skipping`);
-        return this.createEmptyResult(post, []);
+        logger.debug(
+          `Post ${post.id} doesn't contain exact watch terms but was fetched via search - using context attribution`
+        );
+        
+        if (effectiveSearchContext) {
+          // Post was fetched for specific term - use that search context
+          logger.debug(`Using search context '${effectiveSearchContext}' for post ${post.id}`);
+          watchTermsFound.push(effectiveSearchContext);
+        } else {
+          // Try to infer from post metadata (URLs, usernames, hashtags, etc.)
+          const inferredWatchTerms = this.inferWatchTermsFromPost(post);
+          if (inferredWatchTerms.length === 0) {
+            // Only use ai16z fallback if no other matches found and no search context
+            logger.debug(`No context or inference possible, using default fallback for post ${post.id}`);
+            inferredWatchTerms.push(this.watchTerms[0] || 'ai16z');
+          }
+          watchTermsFound.push(...inferredWatchTerms);
+        }
       }
 
       // Analyze sentiment using LLM
       const sentiment = await this.scoreSentiment(post.content.text);
-      
+
       // Extract entities and topics
       const entities = await this.extractEntities(post.content.text);
       const topics = await this.extractTopics(post.content.text);
@@ -80,9 +95,8 @@ export class SentimentAnalysisService extends Service {
         entities,
         topics,
         watchTermsFound,
-        influence
+        influence,
       };
-
     } catch (error) {
       logger.error(`Error analyzing sentiment for post ${post.id}:`, error);
       return this.createEmptyResult(post, []);
@@ -94,21 +108,21 @@ export class SentimentAnalysisService extends Service {
    */
   async analyzeBatch(posts: SocialMediaPost[]): Promise<ProcessedSentiment[]> {
     logger.info(`Batch analyzing sentiment for ${posts.length} posts`);
-    
+
     const results: ProcessedSentiment[] = [];
     const batchSize = 5; // Process in smaller batches to avoid rate limits
 
     for (let i = 0; i < posts.length; i += batchSize) {
       const batch = posts.slice(i, i + batchSize);
-      const batchPromises = batch.map(post => this.analyzeSentiment(post));
-      
+      const batchPromises = batch.map((post) => this.analyzeSentiment(post));
+
       try {
         const batchResults = await Promise.all(batchPromises);
         results.push(...batchResults);
-        
+
         // Small delay between batches to be respectful to LLM API
         if (i + batchSize < posts.length) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          await new Promise((resolve) => setTimeout(resolve, 1000));
         }
       } catch (error) {
         logger.error(`Error in batch ${i}-${i + batchSize}:`, error);
@@ -157,7 +171,7 @@ Magnitude: How strong/intense the emotional content is regardless of direction`;
       const response = await this.runtime.useModel(ModelType.TEXT_SMALL, {
         prompt,
         max_tokens: 200,
-        temperature: 0.1 // Low temperature for consistent analysis
+        temperature: 0.1, // Low temperature for consistent analysis
       });
 
       return this.parseSentimentResponse(response);
@@ -166,7 +180,7 @@ Magnitude: How strong/intense the emotional content is regardless of direction`;
       return {
         score: 0,
         confidence: 0,
-        magnitude: 0
+        magnitude: 0,
       };
     }
   }
@@ -190,7 +204,7 @@ Magnitude: How strong/intense the emotional content is regardless of direction`;
       return {
         score: Math.max(-1, Math.min(1, score)),
         confidence: Math.max(0, Math.min(1, confidence)),
-        magnitude: Math.max(0, Math.min(1, magnitude))
+        magnitude: Math.max(0, Math.min(1, magnitude)),
       };
     } catch (error) {
       logger.error('Error parsing sentiment response:', error);
@@ -228,7 +242,7 @@ Guidelines:
       const response = await this.runtime.useModel(ModelType.TEXT_SMALL, {
         prompt,
         max_tokens: 300,
-        temperature: 0.2
+        temperature: 0.2,
       });
 
       return await this.parseEntitiesResponse(response, text);
@@ -241,9 +255,12 @@ Guidelines:
   /**
    * Parse entities response from LLM
    */
-  private async parseEntitiesResponse(response: unknown, originalText: string): Promise<ExtractedEntity[]> {
+  private async parseEntitiesResponse(
+    response: unknown,
+    originalText: string
+  ): Promise<ExtractedEntity[]> {
     const entities: ExtractedEntity[] = [];
-    
+
     try {
       const responseStr = String(response);
       // Find all entity blocks
@@ -269,7 +286,7 @@ Guidelines:
             text: entityText,
             type: entityType,
             relevance: Math.max(0, Math.min(1, relevance)),
-            sentiment: entitySentiment
+            sentiment: entitySentiment,
           });
         }
       }
@@ -288,7 +305,7 @@ Guidelines:
     return {
       score: 0,
       confidence: 0.5,
-      magnitude: 0.3
+      magnitude: 0.3,
     };
   }
 
@@ -323,7 +340,7 @@ Maximum 3 most important topics.`;
       const response = await this.runtime.useModel(ModelType.TEXT_SMALL, {
         prompt,
         max_tokens: 250,
-        temperature: 0.3
+        temperature: 0.3,
       });
 
       return this.parseTopicsResponse(response);
@@ -338,7 +355,7 @@ Maximum 3 most important topics.`;
    */
   private parseTopicsResponse(response: unknown): ExtractedTopic[] {
     const topics: ExtractedTopic[] = [];
-    
+
     try {
       const responseStr = String(response);
       const topicPattern = /<topic>[\s\S]*?<\/topic>/g;
@@ -354,14 +371,14 @@ Maximum 3 most important topics.`;
         if (nameMatch) {
           const name = nameMatch[1].trim();
           const keywordStr = keywordsMatch ? keywordsMatch[1].trim() : '';
-          const keywords = keywordStr ? keywordStr.split(',').map(k => k.trim()) : [];
+          const keywords = keywordStr ? keywordStr.split(',').map((k) => k.trim()) : [];
           const relevance = relevanceMatch ? parseFloat(relevanceMatch[1]) : 0.5;
 
           topics.push({
             name,
             keywords,
             relevance: Math.max(0, Math.min(1, relevance)),
-            frequency: 1 // Will be calculated properly during aggregation
+            frequency: 1, // Will be calculated properly during aggregation
           });
         }
       }
@@ -373,13 +390,112 @@ Maximum 3 most important topics.`;
   }
 
   /**
-   * Find watch terms in text
+   * Find watch terms in text with enhanced matching for case variations and common patterns
    */
   private findWatchTerms(text: string): string[] {
     const lowerText = text.toLowerCase();
-    return this.watchTerms.filter(term => 
-      lowerText.includes(term.toLowerCase())
-    );
+    const matchedTerms: string[] = [];
+    
+    for (const term of this.watchTerms) {
+      const termLower = term.toLowerCase();
+      
+      // Direct match (existing logic)
+      if (lowerText.includes(termLower)) {
+        matchedTerms.push(term);
+        continue;
+      }
+      
+      // Enhanced matching for common variations
+      const variations = this.generateTermVariations(termLower);
+      for (const variation of variations) {
+        if (lowerText.includes(variation)) {
+          matchedTerms.push(term);
+          break; // Only add the term once
+        }
+      }
+    }
+    
+    return [...new Set(matchedTerms)]; // Remove duplicates
+  }
+  
+  /**
+   * Generate common variations of a watch term for better matching
+   */
+  private generateTermVariations(term: string): string[] {
+    const variations = [term]; // Include the original term
+    
+    // Add hashtag and ticker symbol versions
+    variations.push(`#${term}`);
+    variations.push(`$${term}`);
+    variations.push(`@${term}`);
+    
+    // Add case variations if not all lowercase
+    if (term !== term.toLowerCase()) {
+      variations.push(term.toUpperCase());
+      variations.push(term.charAt(0).toUpperCase() + term.slice(1).toLowerCase());
+    }
+    
+    // Add common patterns for specific terms
+    if (term === 'elizaos') {
+      variations.push('eliza os', 'eliza-os', 'elizaOS', 'ElizaOS', 'ELIZAOS');
+    }
+    
+    if (term === 'ai16z') {
+      variations.push('AI16Z', 'ai16z', 'AI16z');
+    }
+    
+    // Add space-separated version for compound terms
+    if (term.length > 4 && !term.includes(' ')) {
+      // Try to split camelCase or add spaces
+      const spaced = term.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
+      if (spaced !== term) {
+        variations.push(spaced);
+      }
+    }
+    
+    return variations;
+  }
+
+  /**
+   * Infer watch terms from post context (URL, hashtags, etc.)
+   * Used when exact text matching fails but the post was fetched via search
+   */
+  private inferWatchTermsFromPost(post: SocialMediaPost): string[] {
+    const inferredTerms: string[] = [];
+
+    // Check URL for watch terms
+    if (post.content.url) {
+      const lowerUrl = post.content.url.toLowerCase();
+      for (const term of this.watchTerms) {
+        if (lowerUrl.includes(term.toLowerCase())) {
+          inferredTerms.push(term);
+        }
+      }
+    }
+
+    // Check author username for watch terms
+    const lowerUsername = post.author.username.toLowerCase();
+    for (const term of this.watchTerms) {
+      if (lowerUsername.includes(term.toLowerCase())) {
+        inferredTerms.push(term);
+      }
+    }
+
+    // Look for partial matches or variations
+    const lowerText = post.content.text.toLowerCase();
+    for (const term of this.watchTerms) {
+      const termLower = term.toLowerCase();
+      // Check for hashtag versions
+      if (lowerText.includes(`#${termLower}`) || lowerText.includes(`$${termLower}`)) {
+        inferredTerms.push(term);
+      }
+      // Check for partial matches (e.g., "ai16" matching "ai16z")
+      if (termLower.length > 3 && lowerText.includes(termLower.slice(0, -1))) {
+        inferredTerms.push(term);
+      }
+    }
+
+    return [...new Set(inferredTerms)]; // Remove duplicates
   }
 
   /**
@@ -402,13 +518,13 @@ Maximum 3 most important topics.`;
     const likes = post.metrics.likes || 0;
     const retweets = post.metrics.retweets || 0;
     const replies = post.metrics.replies || 0;
-    
-    const totalEngagement = likes + (retweets * 2) + (replies * 1.5);
+
+    const totalEngagement = likes + retweets * 2 + replies * 1.5;
     let viralityPotential = Math.min(totalEngagement / 100, 1.0); // Normalize to 0-1
 
     return {
       authorInfluence,
-      viralityPotential
+      viralityPotential,
     };
   }
 
@@ -424,7 +540,7 @@ Maximum 3 most important topics.`;
       entities: [],
       topics: [],
       watchTermsFound,
-      influence: { authorInfluence: 0, viralityPotential: 0 }
+      influence: { authorInfluence: 0, viralityPotential: 0 },
     };
   }
 
@@ -439,7 +555,7 @@ Maximum 3 most important topics.`;
    * Update watch terms
    */
   setWatchTerms(terms: string[]): void {
-    this.watchTerms = terms.map(term => term.trim().toLowerCase());
+    this.watchTerms = terms.map((term) => term.trim().toLowerCase());
     logger.info(`Updated watch terms: ${this.watchTerms.join(', ')}`);
   }
 }

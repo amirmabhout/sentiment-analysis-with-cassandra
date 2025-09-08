@@ -4,7 +4,7 @@ import {
   type IAgentRuntime,
   type Memory,
   type State,
-  logger
+  logger,
 } from '@elizaos/core';
 
 /**
@@ -15,11 +15,7 @@ export const sentimentDataProvider: Provider = {
   name: 'SENTIMENT_DATA',
   description: 'Provides current sentiment analysis data and trends for ai16z and elizaOS',
 
-  get: async (
-    runtime: IAgentRuntime,
-    message: Memory,
-    state: State
-  ): Promise<ProviderResult> => {
+  get: async (runtime: IAgentRuntime, message: Memory, state: State): Promise<ProviderResult> => {
     logger.debug('[SentimentDataProvider] Getting sentiment context');
 
     try {
@@ -33,7 +29,7 @@ export const sentimentDataProvider: Provider = {
         return {
           text: 'Sentiment analysis services are currently unavailable.',
           values: {},
-          data: {}
+          data: {},
         };
       }
 
@@ -67,32 +63,33 @@ export const sentimentDataProvider: Provider = {
           sentimentChange: recentReport.overallMetrics.sentimentChange,
           hasAlerts: recentReport.alerts.length > 0,
           alertCount: recentReport.alerts.length,
-          topWatchTerm: recentReport.breakdowns.length > 0 ? recentReport.breakdowns[0].watchTerm : '',
-          dominantNarrative: recentReport.narratives.length > 0 ? recentReport.narratives[0].theme : ''
+          topWatchTerm:
+            recentReport.breakdowns.length > 0 ? recentReport.breakdowns[0].watchTerm : '',
+          dominantNarrative:
+            recentReport.narratives.length > 0 ? recentReport.narratives[0].theme : '',
         },
         data: {
           sentimentReport: recentReport,
           twitterStats,
           watchTerms,
-          timestamp: Date.now()
-        }
+          timestamp: Date.now(),
+        },
       };
-
     } catch (error) {
       logger.error('[SentimentDataProvider] Error getting sentiment data:', error);
-      
+
       return {
         text: 'Unable to retrieve current sentiment data due to a system error.',
         values: {
           error: true,
-          errorMessage: error instanceof Error ? error.message : 'Unknown error'
+          errorMessage: error instanceof Error ? error.message : 'Unknown error',
         },
         data: {
-          error: error instanceof Error ? error.message : 'Unknown error'
-        }
+          error: error instanceof Error ? error.message : 'Unknown error',
+        },
       };
     }
-  }
+  },
 };
 
 /**
@@ -104,7 +101,7 @@ function formatSentimentContext(report: any, twitterStats: any): string {
   // Overall metrics
   const sentimentLabel = getSentimentLabel(report.overallMetrics.averageSentiment.score);
   const sentimentScore = report.overallMetrics.averageSentiment.score;
-  
+
   context += `**Overall Sentiment (Last 4h):** ${sentimentLabel} (${sentimentScore.toFixed(2)})\n`;
   context += `**Total Posts Analyzed:** ${report.overallMetrics.totalVolume}\n`;
 
@@ -142,7 +139,7 @@ function formatSentimentContext(report: any, twitterStats: any): string {
     context += `\n**Active Alerts:**\n`;
     const highAlerts = report.alerts.filter((a: any) => a.severity === 'high');
     const mediumAlerts = report.alerts.filter((a: any) => a.severity === 'medium');
-    
+
     if (highAlerts.length > 0) {
       context += `• ${highAlerts.length} HIGH priority alerts\n`;
     }
@@ -161,7 +158,7 @@ function formatSentimentContext(report: any, twitterStats: any): string {
     context += `\n**Twitter Activity (24h):**\n`;
     context += `• Total tweets: ${twitterStats.totalTweets}\n`;
     context += `• Average engagement: ${twitterStats.avgEngagement.toFixed(1)}\n`;
-    
+
     if (twitterStats.topAuthors.length > 0) {
       context += `• Most active: @${twitterStats.topAuthors[0].username} (${twitterStats.topAuthors[0].posts} posts)\n`;
     }
@@ -206,46 +203,46 @@ export const sentimentTrendsProvider: Provider = {
   name: 'SENTIMENT_TRENDS',
   description: 'Provides historical sentiment trends and pattern analysis',
 
-  get: async (
-    runtime: IAgentRuntime,
-    message: Memory,
-    state: State
-  ): Promise<ProviderResult> => {
+  get: async (runtime: IAgentRuntime, message: Memory, state: State): Promise<ProviderResult> => {
     logger.debug('[SentimentTrendsProvider] Getting trend context');
 
     try {
       const aggregatorService = runtime.getService('sentiment-aggregator');
-      
+
       if (!aggregatorService) {
         return {
           text: 'Sentiment trend analysis is currently unavailable.',
           values: {},
-          data: {}
+          data: {},
         };
       }
 
       // Get recent memories containing trend analysis
       const trendMemories = await runtime.searchMemories({
         tableName: 'messages',
-        embedding: await runtime.useModel('text-embedding-3-small', {
-          text: 'sentiment trend analysis weekly report'
-        }) as number[],
+        embedding: (await runtime.useModel('text-embedding-3-small', {
+          text: 'sentiment trend analysis weekly report',
+        })) as number[],
         match_threshold: 0.8,
-        count: 3
+        count: 3,
       });
 
       let trendsContext = `## Historical Sentiment Trends\n\n`;
 
       if (trendMemories.length > 0) {
         const latestTrend = trendMemories[0];
-        if (latestTrend.content && typeof latestTrend.content === 'object' && 'trend_insights' in latestTrend.content) {
+        if (
+          latestTrend.content &&
+          typeof latestTrend.content === 'object' &&
+          'trend_insights' in latestTrend.content
+        ) {
           const insights = (latestTrend.content as any).trend_insights;
-          
+
           trendsContext += `**Recent Trend Analysis:**\n`;
           trendsContext += `• Overall sentiment trend: ${insights.sentimentTrend}\n`;
           trendsContext += `• Volume trend: ${insights.volumeTrend}\n`;
           trendsContext += `• Alert activity: ${insights.alertSummary.total} total (${insights.alertSummary.highSeverity} high priority)\n`;
-          
+
           if (insights.dominantNarratives.length > 0) {
             trendsContext += `• Dominant narrative: ${insights.dominantNarratives[0].theme}\n`;
           }
@@ -258,22 +255,21 @@ export const sentimentTrendsProvider: Provider = {
         text: trendsContext,
         values: {
           hasTrendData: trendMemories.length > 0,
-          trendMemoryCount: trendMemories.length
+          trendMemoryCount: trendMemories.length,
         },
         data: {
           trendMemories,
-          timestamp: Date.now()
-        }
+          timestamp: Date.now(),
+        },
       };
-
     } catch (error) {
       logger.error('[SentimentTrendsProvider] Error getting trend data:', error);
-      
+
       return {
         text: 'Unable to retrieve sentiment trend data.',
         values: { error: true },
-        data: { error: error instanceof Error ? error.message : 'Unknown error' }
+        data: { error: error instanceof Error ? error.message : 'Unknown error' },
       };
     }
-  }
+  },
 };

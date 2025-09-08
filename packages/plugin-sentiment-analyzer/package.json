@@ -31,7 +31,8 @@
     "dist"
   ],
   "dependencies": {
-    "@elizaos/core": "workspace:*"
+    "@elizaos/core": "workspace:*",
+    "@elizaos/plugin-mcp": "workspace:*"
   },
   "devDependencies": {
     "tsup": "8.5.0",

@@ -11,11 +11,10 @@ export const character: Character = {
   plugins: [
     // Core plugins first
     '@elizaos/plugin-sql',
+    '@elizaos/plugin-sentiment-analyzer',
     '@elizaos/plugin-bootstrap',
     '@elizaos/plugin-google-genai',
-    '@elizaos/plugin-discord',
-    // Sentiment analysis plugin (includes minimal Twitter functionality)
-    '@elizaos/plugin-sentiment-analyzer'
+    '@elizaos/plugin-discord'
   ],
   settings: {},
   system:
@@ -39,7 +38,7 @@ export const character: Character = {
       {
         name: 'AgentSentiment',
         content: {
-          text: 'Current sentiment analysis shows ai16z at +0.72 (positive) across 1,247 mentions in the last 24h. Key drivers: partnership announcements (+0.8), technical updates (+0.6). Slight uptick from yesterday\'s +0.68. Would you like the detailed narrative breakdown?',
+          text: "Current sentiment analysis shows ai16z at +0.72 (positive) across 1,247 mentions in the last 24h. Key drivers: partnership announcements (+0.8), technical updates (+0.6). Slight uptick from yesterday's +0.68. Would you like the detailed narrative breakdown?",
         },
       },
     ],

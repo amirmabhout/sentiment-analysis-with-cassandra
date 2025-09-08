@@ -1,8 +1,8 @@
 import { Service, type IAgentRuntime, logger } from '@elizaos/core';
-import { 
-  sentimentProcessingTask, 
-  sentimentReportingTask, 
-  sentimentTrendAnalysisTask 
+import {
+  sentimentProcessingTask,
+  sentimentReportingTask,
+  sentimentTrendAnalysisTask,
 } from '../tasks/sentiment-task.ts';
 
 /**
@@ -41,10 +41,15 @@ export class StartupService extends Service {
       const existingReportTask = await this.runtime.getTasksByName('SENTIMENT_REPORTING_TASK');
       const existingTrendTask = await this.runtime.getTasksByName('SENTIMENT_TREND_ANALYSIS_TASK');
 
-      // Create main processing task (every 10 minutes by default, but can be configured)
+      // Create main processing task (every 5 minutes by default, but can be configured)
       if (existingMainTask.length === 0) {
-        const processingInterval = parseInt(process.env.SENTIMENT_PROCESSING_INTERVAL || '600000', 10); // 10 minutes default
-        
+        const processingInterval = parseInt(
+          (this.runtime.getSetting('SENTIMENT_PROCESSING_INTERVAL') as string) ||
+            process.env.SENTIMENT_PROCESSING_INTERVAL ||
+            '300000',
+          10
+        ); // 5 minutes default
+
         await this.runtime.createTask({
           name: 'SENTIMENT_PROCESSING_TASK',
           description: 'Recurring sentiment analysis processing of social media streams',
@@ -52,20 +57,28 @@ export class StartupService extends Service {
           roomId: this.runtime.agentId,
           metadata: {
             updatedAt: Date.now(),
-            updateInterval: 60000, // Check every 1 minute
-            actualProcessingInterval: processingInterval, // But only process at this interval
+            updateInterval: processingInterval, // Check at the same interval as processing
+            actualProcessingInterval: processingInterval, // Process at this interval
             lastProcessedTimestamp: Date.now() - processingInterval,
-            watchTerms: (process.env.SENTIMENT_WATCH_TERMS || 'ai16z,elizaos').split(','),
+            watchTerms: (
+              (this.runtime.getSetting('SENTIMENT_WATCH_TERMS') as string) ||
+              process.env.SENTIMENT_WATCH_TERMS ||
+              'ai16z,elizaos'
+            )
+              .split(',')
+              .map((t) => t.trim()),
             processingStats: {
               postsProcessed: 0,
               errors: 0,
-              avgProcessingTime: 0
-            }
+              avgProcessingTime: 0,
+            },
           },
-          tags: ['queue', 'repeat', 'sentiment']
+          tags: ['queue', 'repeat', 'sentiment'],
         });
 
-        logger.info(`✅ Created sentiment processing task with ${processingInterval / 1000 / 60} minute interval`);
+        logger.info(
+          `✅ Created sentiment processing task with ${processingInterval / 1000 / 60} minute interval`
+        );
       } else {
         logger.info('✅ Sentiment processing task already exists');
       }
@@ -81,9 +94,9 @@ export class StartupService extends Service {
             updatedAt: Date.now(),
             updateInterval: 60000, // Check every 1 minute
             actualReportInterval: 6 * 60 * 60 * 1000, // But only report every 6 hours
-            lastReportTime: 0
+            lastReportTime: 0,
           },
-          tags: ['queue', 'repeat', 'sentiment', 'reporting']
+          tags: ['queue', 'repeat', 'sentiment', 'reporting'],
         });
 
         logger.info('✅ Created sentiment reporting task (6 hour interval)');
@@ -92,7 +105,7 @@ export class StartupService extends Service {
       // Create trend analysis task (every 24 hours)
       if (existingTrendTask.length === 0) {
         await this.runtime.createTask({
-          name: 'SENTIMENT_TREND_ANALYSIS_TASK', 
+          name: 'SENTIMENT_TREND_ANALYSIS_TASK',
           description: 'Weekly sentiment trend analysis and insights',
           worldId: this.runtime.worldId || '00000000-0000-0000-0000-000000000000',
           roomId: this.runtime.agentId,
@@ -100,16 +113,15 @@ export class StartupService extends Service {
             updatedAt: Date.now(),
             updateInterval: 60000, // Check every 1 minute
             actualTrendInterval: 24 * 60 * 60 * 1000, // But only analyze trends every 24 hours
-            lastTrendTime: 0
+            lastTrendTime: 0,
           },
-          tags: ['queue', 'repeat', 'sentiment', 'trends']
+          tags: ['queue', 'repeat', 'sentiment', 'trends'],
         });
 
         logger.info('✅ Created sentiment trend analysis task (24 hour interval)');
       }
 
       logger.info('🎯 All sentiment analysis tasks configured successfully');
-
     } catch (error) {
       logger.error('❌ Error setting up sentiment analysis tasks:', error);
       throw error;

@@ -35,6 +35,7 @@
     "@elizaos/plugin-sentiment-analyzer": "workspace:*",
     "@elizaos/plugin-sql": "latest",
     "@elizaos/plugin-telegram": "latest",
+    "@elizaos/plugin-mcp": "workspace:*",
     "@tanstack/react-query": "^5.29.0",
     "clsx": "^2.1.1",
     "react": "^18.3.1",

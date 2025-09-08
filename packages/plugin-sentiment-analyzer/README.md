@@ -31,7 +31,7 @@ Configure the plugin using environment variables:
 OPENAI_API_KEY=your_openai_key
 # OR
 ANTHROPIC_API_KEY=your_anthropic_key
-# OR  
+# OR
 GOOGLE_GENAI_API_KEY=your_google_key
 
 # Twitter API credentials (for data fetching)
@@ -75,10 +75,10 @@ export const character: Character = {
   name: 'SentimentAgent',
   plugins: [
     '@elizaos/plugin-bootstrap',
-    '@elizaos/plugin-sql', 
+    '@elizaos/plugin-sql',
     '@elizaos/plugin-twitter',
     '@elizaos/plugin-discord',
-    '@elizaos/plugin-sentiment-analyzer' // Add this line
+    '@elizaos/plugin-sentiment-analyzer', // Add this line
   ],
   // ... rest of character config
 };
@@ -89,15 +89,18 @@ export const character: Character = {
 The plugin enables several interaction patterns:
 
 **Request sentiment reports:**
+
 - "What's the current sentiment around ai16z?"
 - "Show me the weekly sentiment analysis"
 - "Generate a sentiment report for the last 24 hours"
 
 **Check for alerts:**
+
 - "Are there any sentiment spikes?"
 - "Any alerts I should know about?"
 
 The agent will automatically:
+
 - Process new social media posts every 5 minutes (configurable)
 - Generate detailed reports every 6 hours
 - Perform trend analysis every 24 hours
@@ -175,7 +178,7 @@ Key Narratives:
 1. Partnership announcements (89 posts) 🟢
    Key phrases: partnership, collaboration, ecosystem
 
-2. Technical development (67 posts) 🔵  
+2. Technical development (67 posts) 🔵
    Key phrases: updates, features, development
 
 Top Mentioned Entities:

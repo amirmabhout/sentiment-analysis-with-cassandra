@@ -34,7 +34,7 @@ import {
  */
 export class TaskService extends Service {
   private timer: NodeJS.Timeout | null = null;
-  private readonly TICK_INTERVAL = 1000; // Check every second
+  private readonly TICK_INTERVAL = 60000; // Check every minute
   static serviceType = ServiceType.TASK;
   capabilityDescription = 'The agent is able to schedule and execute tasks';
 

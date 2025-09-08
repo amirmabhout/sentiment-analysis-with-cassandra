@@ -20,7 +20,10 @@ bun install
 
 # Configure environment variables
 cp .env.example .env
-# Edit .env with your API keys (Google GenAI, Telegram, etc.)
+# Edit .env with your API keys and MCP server URL:
+# - MCP_SERVER_URL=https://sequencer-v2.heurist.xyz/tool[YOUR_SERVER_ID]/sse
+# - OPENAI_API_KEY=your_openai_key (or ANTHROPIC_API_KEY, GOOGLE_GENAI_API_KEY)
+# - DISCORD_API_TOKEN=your_discord_token (optional, for reporting)
 
 # Start the sentiment tracking agent
 elizaos start

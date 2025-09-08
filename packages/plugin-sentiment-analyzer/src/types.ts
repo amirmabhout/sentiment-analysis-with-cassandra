@@ -57,6 +57,7 @@ export interface SocialMediaPost {
   };
   timestamp: number;
   conversationId?: string;
+  searchContext?: string; // The search term this post was fetched for
 }
 
 /**
@@ -89,7 +90,7 @@ export interface SentimentAggregation {
   totalPosts: number;
   sentimentDistribution: {
     positive: number;
-    neutral: number; 
+    neutral: number;
     negative: number;
   };
   overallSentiment: SentimentScore;
