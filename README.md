@@ -11,7 +11,7 @@ A framework for multi-agent development and deployment
 - 👥 Multi-agent and group support with intuitive management.
 - 📚 Easily ingest and interact with your documents.
 - 💾 Retrievable memory and document store.
-- 🚀 Highly extensible - create your own actions and clients.
+- 🚀 Highly extensible - create your own actions and clients. 
 - 📦 Just works!
 
 ## 🎯 Use Cases
