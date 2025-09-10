@@ -78,21 +78,29 @@ export class SentimentPersistenceService extends Service {
       // Create memory first and capture the returned ID
       const createdMemoryId = await this.runtime.createMemory(tweetMemory, 'tweets', true);
 
-      // Update the memory object with the actual ID from the database (following bootstrap pattern)
+      // Update the memory with metadata
+      const metadata = {
+        type: 'tweet',
+        platform: tweet.platform,
+        tweetId: tweet.id,
+        authorUsername: tweet.author.username,
+        searchTerms: tweet.searchTerms?.join(',') || '',
+        collectedAt: Date.now(),
+        hasMedia: tweet.content.hasMedia,
+        isRetweet: tweet.content.isRetweet || false,
+        isReply: tweet.content.isReply || false,
+      };
+
+      await this.runtime.updateMemory({
+        id: createdMemoryId,
+        metadata: JSON.stringify(metadata),
+      });
+
+      // Update the memory object with the actual ID and metadata for embedding generation
       const createdMemory = {
         ...tweetMemory,
         id: createdMemoryId,
-        metadata: JSON.stringify({
-          type: 'tweet',
-          platform: tweet.platform,
-          tweetId: tweet.id,
-          authorUsername: tweet.author.username,
-          searchTerms: tweet.searchTerms?.join(',') || '',
-          collectedAt: Date.now(),
-          hasMedia: tweet.content.hasMedia,
-          isRetweet: tweet.content.isRetweet || false,
-          isReply: tweet.content.isReply || false,
-        }),
+        metadata: JSON.stringify(metadata),
       };
 
       // Queue embedding generation asynchronously with correct memory object (following bootstrap pattern line 263)
@@ -135,22 +143,30 @@ export class SentimentPersistenceService extends Service {
         true
       );
 
-      // Update the memory object with the actual ID from the database (following bootstrap pattern)
+      // Update the memory with metadata
+      const metadata = {
+        type: 'sentiment_analysis',
+        tweetId: analysis.postId,
+        tweetMemoryId: tweetMemoryId || null,
+        platform: analysis.platform,
+        sentimentScore: analysis.sentiment.score,
+        watchTerms: analysis.watchTermsFound.join(','),
+        entityCount: analysis.entities.length,
+        topicCount: analysis.topics.length,
+        authorInfluence: analysis.influence.authorInfluence,
+        viralityPotential: analysis.influence.viralityPotential,
+      };
+
+      await this.runtime.updateMemory({
+        id: createdMemoryId,
+        metadata: JSON.stringify(metadata),
+      });
+
+      // Update the memory object with the actual ID and metadata for embedding generation
       const createdMemory = {
         ...sentimentMemory,
         id: createdMemoryId,
-        metadata: JSON.stringify({
-          type: 'sentiment_analysis',
-          tweetId: analysis.postId,
-          tweetMemoryId: tweetMemoryId || null,
-          platform: analysis.platform,
-          sentimentScore: analysis.sentiment.score,
-          watchTerms: analysis.watchTermsFound.join(','),
-          entityCount: analysis.entities.length,
-          topicCount: analysis.topics.length,
-          authorInfluence: analysis.influence.authorInfluence,
-          viralityPotential: analysis.influence.viralityPotential,
-        }),
+        metadata: JSON.stringify(metadata),
       };
 
       // Queue embedding generation asynchronously with correct memory object (following bootstrap pattern)
@@ -192,22 +208,30 @@ export class SentimentPersistenceService extends Service {
         true
       );
 
-      // Update the memory object with the actual ID from the database (following bootstrap pattern)
+      // Update the memory with metadata
+      const metadata = {
+        type: 'sentiment_report',
+        reportId: report.id,
+        reportType: report.reportType,
+        timeframeHours: Math.round(
+          (report.timeframe.end - report.timeframe.start) / (60 * 60 * 1000)
+        ),
+        totalPosts: report.overallMetrics.totalVolume,
+        alertCount: report.alerts.length,
+        watchTerms: report.watchTerms.join(','),
+        averageSentiment: report.overallMetrics.averageSentiment.score,
+      };
+
+      await this.runtime.updateMemory({
+        id: createdMemoryId,
+        metadata: JSON.stringify(metadata),
+      });
+
+      // Update the memory object with the actual ID and metadata for embedding generation
       const createdMemory = {
         ...reportMemory,
         id: createdMemoryId,
-        metadata: JSON.stringify({
-          type: 'sentiment_report',
-          reportId: report.id,
-          reportType: report.reportType,
-          timeframeHours: Math.round(
-            (report.timeframe.end - report.timeframe.start) / (60 * 60 * 1000)
-          ),
-          totalPosts: report.overallMetrics.totalVolume,
-          alertCount: report.alerts.length,
-          watchTerms: report.watchTerms.join(','),
-          averageSentiment: report.overallMetrics.averageSentiment.score,
-        }),
+        metadata: JSON.stringify(metadata),
       };
 
       // Queue embedding generation asynchronously with correct memory object (following bootstrap pattern)
@@ -217,6 +241,69 @@ export class SentimentPersistenceService extends Service {
       return createdMemoryId;
     } catch (error) {
       logger.error(`[PERSISTENCE] Error storing report ${report.id}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Get the latest stored sentiment report within specified timeframe
+   */
+  async getLatestReport(timeframeHours?: number): Promise<SentimentReport | null> {
+    logger.debug(
+      `[PERSISTENCE] Retrieving latest sentiment report (${timeframeHours || 'any'} hours)`
+    );
+
+    try {
+      const memories = await this.runtime.getMemories({
+        tableName: 'sentiment_reports',
+        agentId: this.runtime.agentId,
+        count: 10, // Get recent reports
+      });
+
+      if (!memories || memories.length === 0) {
+        logger.debug('[PERSISTENCE] No stored sentiment reports found');
+        return null;
+      }
+
+      // Filter by timeframe if specified
+      let filteredMemories = memories;
+      if (timeframeHours) {
+        filteredMemories = memories.filter((memory) => {
+          try {
+            const metadata = memory.metadata ? JSON.parse(memory.metadata) : {};
+            return metadata.timeframeHours === timeframeHours;
+          } catch (error) {
+            return false;
+          }
+        });
+      }
+
+      if (filteredMemories.length === 0) {
+        logger.debug(`[PERSISTENCE] No reports found for ${timeframeHours}h timeframe`);
+        return null;
+      }
+
+      // Sort by creation time (most recent first)
+      filteredMemories.sort((a, b) => b.createdAt - a.createdAt);
+      const latestMemory = filteredMemories[0];
+
+      // Extract the sentiment report from memory content
+      if (
+        latestMemory.content &&
+        typeof latestMemory.content === 'object' &&
+        'sentiment_report' in latestMemory.content
+      ) {
+        const report = (latestMemory.content as any).sentiment_report as SentimentReport;
+        logger.debug(
+          `[PERSISTENCE] Retrieved report ${report.id} from ${new Date(report.generatedAt).toISOString()}`
+        );
+        return report;
+      }
+
+      logger.warn('[PERSISTENCE] Latest report memory has invalid format');
+      return null;
+    } catch (error) {
+      logger.error('[PERSISTENCE] Error retrieving latest report:', error);
       return null;
     }
   }

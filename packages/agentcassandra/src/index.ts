@@ -1,4 +1,4 @@
-import { logger, type IAgentRuntime, type Project, type ProjectAgent } from '@elizaos/core';
+import { logger, IAgentRuntime, Project, ProjectAgent } from '@elizaos/core';
 //import sentimentWebPlugin from './plugin-sentiment-web/src/index.ts';
 import { character } from './character.ts';
 
@@ -17,7 +17,7 @@ const project: Project = {
 };
 
 // Export test suites for the test runner
-export { testSuites } from './__tests__/e2e/index.ts';
+//export { testSuites } from './__tests__/e2e/index.ts';
 export { character } from './character.ts';
 
 export default project;

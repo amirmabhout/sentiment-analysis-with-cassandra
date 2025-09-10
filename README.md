@@ -2,6 +2,84 @@
 
 A framework for multi-agent development and deployment
 
+## 🤖 Agent Cassandra - Advanced Sentiment Analysis
+
+<div align="center">
+<img src="cassandra.png" alt="Agent Cassandra" width="300"/>
+</div>
+
+**Agent Cassandra** is a specialized AI agent that monitors and analyzes sentiment around given keywords across social media platforms. This repository includes two custom components:
+
+- **`packages/agentcassandra/`** - The Cassandra agent implementation with specialized personality for sentiment analysis
+- **`packages/plugin-sentiment-analyzer/`** - Comprehensive sentiment analysis plugin providing real-time monitoring capabilities
+
+### 🚀 Quick Start with Cassandra
+
+1. **Install dependencies:**
+
+   ```bash
+   bun install
+   ```
+
+2. **Build the project:**
+
+   ```bash
+   bun run build
+   ```
+
+3. **Configure and run Cassandra:**
+   ```bash
+   cd packages/agentcassandra
+   cp .env.example .env
+   # Edit .env with your API keys (see configuration section below)
+   bun start
+   ```
+
+### 🎯 Key Capabilities
+
+Cassandra leverages the sentiment analyzer plugin to provide:
+
+- **🔍 Real-time Twitter Monitoring** - Automatically fetches tweets via RapidAPI integration
+- **🧠 Advanced LLM Sentiment Analysis** - Uses OpenAI/Anthropic/Google models for accurate sentiment scoring
+- **📊 Entity & Topic Extraction** - Identifies key people, organizations, and themes in conversations
+- **📈 Trend Analysis & Aggregation** - Statistical analysis of sentiment changes over time
+- **⚡ Dynamic Scheduling** - Adjusts monitoring frequency based on social media traffic patterns
+- **🚨 Intelligent Alert System** - Real-time alerts for high-importance negative sentiment
+- **💬 Discord Integration** - Automated reporting and alerts in Discord channels (any other client such as telegram, etc is possible with Eliza's plug and play clients)
+- **💾 Historical Data Persistence** - Maintains sentiment history for comprehensive trend analysis
+
+### ⚙️ Required Configuration
+
+Set these environment variables in `packages/agentcassandra/.env`:
+
+```bash
+# LLM Provider (choose one)
+OPENAI_API_KEY=your_openai_key
+# OR ANTHROPIC_API_KEY=your_anthropic_key
+# OR GOOGLE_GENERATIVE_AI_API_KEY=your_google_key
+
+# RapidAPI for Twitter data (REQUIRED)
+RAPIDAPI_API_KEY=your_rapidapi_key
+RAPIDAPI_X_HOST=your_rapidapi_host
+
+# Discord Bot (optional, for reporting)
+DISCORD_API_TOKEN=your_discord_bot_token
+DISCORD_REPORT_CHANNEL=your_channel_id
+
+# Optional: Customize monitoring
+SENTIMENT_WATCH_TERMS=ai16z,elizaos,eliza
+```
+
+### 📋 Example Interactions
+
+Ask Cassandra for insights:
+
+- "What's the current sentiment around ai16z?"
+- "Show me the weekly sentiment analysis"
+- "Are there any sentiment spikes I should know about?"
+
+---
+
 ## ✨ Features
 
 - 🛠️ Full-featured Discord, Telegram, and Farcaster connectors (and many more!)
@@ -11,7 +89,7 @@ A framework for multi-agent development and deployment
 - 👥 Multi-agent and group support with intuitive management.
 - 📚 Easily ingest and interact with your documents.
 - 💾 Retrievable memory and document store.
-- 🚀 Highly extensible - create your own actions and clients. 
+- 🚀 Highly extensible - create your own actions and clients.
 - 📦 Just works!
 
 ## 🎯 Use Cases

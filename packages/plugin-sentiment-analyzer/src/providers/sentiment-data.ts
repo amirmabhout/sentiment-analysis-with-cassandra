@@ -8,6 +8,17 @@ import {
   ModelType,
 } from '@elizaos/core';
 
+// Simple cache for reports to avoid repeated database queries
+let reportCache: {
+  report: any | null;
+  timestamp: number;
+} = {
+  report: null,
+  timestamp: 0,
+};
+
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+
 /**
  * Provider that supplies current sentiment data and context
  * Used to inform the agent about recent sentiment trends
@@ -34,13 +45,50 @@ export const sentimentDataProvider: Provider = {
         };
       }
 
-      // Get recent sentiment summary (last 4 hours)
+      // Get watchTerms for later use
       const watchTerms = (sentimentService as any).getWatchTerms();
-      const recentReport = await (aggregatorService as any).generateReport(
-        watchTerms,
-        4, // Last 4 hours for context
-        'summary'
-      );
+
+      // Check cache first to avoid repeated database queries
+      const now = Date.now();
+      let recentReport = null;
+
+      if (reportCache.report && now - reportCache.timestamp < CACHE_DURATION) {
+        recentReport = reportCache.report;
+        logger.debug('[SentimentDataProvider] Using cached report');
+      } else {
+        // Get the latest stored 6-hour report instead of generating a new one
+        const persistenceService = runtime.getService('sentiment-persistence');
+
+        if (persistenceService) {
+          // Try to get the latest 6-hour report first
+          recentReport = await (persistenceService as any).getLatestReport(6);
+
+          // If no 6-hour report, try any recent report
+          if (!recentReport) {
+            recentReport = await (persistenceService as any).getLatestReport();
+          }
+
+          // Cache the result
+          if (recentReport) {
+            reportCache.report = recentReport;
+            reportCache.timestamp = now;
+          }
+        }
+      }
+
+      // Fallback: generate a minimal report only if no stored reports exist
+      if (!recentReport) {
+        logger.info('[SentimentDataProvider] No stored reports found, generating minimal summary');
+        recentReport = await (aggregatorService as any).generateReport(
+          watchTerms,
+          4, // Fallback: 4-hour window
+          'summary'
+        );
+      } else {
+        logger.debug(
+          `[SentimentDataProvider] Using stored report from ${new Date(recentReport.generatedAt).toISOString()}`
+        );
+      }
 
       // Get Twitter activity stats if available
       let twitterStats = null;

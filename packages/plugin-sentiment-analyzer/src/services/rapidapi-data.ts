@@ -1,5 +1,6 @@
 import { Service, type IAgentRuntime, logger } from '@elizaos/core';
 import type { SocialMediaPost } from '../types.ts';
+import type { FetchStatistics } from './traffic-analyzer';
 
 /**
  * RapidAPI-based data service for sentiment analysis
@@ -16,6 +17,7 @@ export class RapidAPIDataService extends Service {
   private processedTweetIds: Set<string> = new Set();
   private maxTweetsPerCycle = 20; // RapidAPI limit is 20
   private lastCursor: string | null = null;
+  private lastFetchStats?: FetchStatistics;
 
   // RapidAPI configuration
   private rapidApiKey: string = '';
@@ -93,10 +95,18 @@ export class RapidAPIDataService extends Service {
   }
 
   /**
+   * Get the last fetch statistics
+   */
+  getLastFetchStatistics(): FetchStatistics | undefined {
+    return this.lastFetchStats;
+  }
+
+  /**
    * Fetch recent tweets using RapidAPI Twitter v2 search endpoint
    * Supports cursor-based pagination and enhanced user profiling
    */
   async fetchRecentTweets(sinceTimestamp?: number): Promise<SocialMediaPost[]> {
+    const fetchStartTime = Date.now();
     const cutoffTimestamp = this.calculateCutoffTimestamp(sinceTimestamp);
 
     logger.info(
@@ -105,6 +115,7 @@ export class RapidAPIDataService extends Service {
 
     try {
       const allPosts: SocialMediaPost[] = [];
+      const watchTermCounts: Record<string, number> = {};
 
       // Search for mentions of each watch term
       for (const term of this.watchTerms) {
@@ -113,6 +124,7 @@ export class RapidAPIDataService extends Service {
 
           const posts = await this.searchTwitterForTerm(term, cutoffTimestamp);
           allPosts.push(...posts);
+          watchTermCounts[term] = posts.length;
 
           logger.info(`Found ${posts.length} posts for term: ${term}`);
 
@@ -120,18 +132,54 @@ export class RapidAPIDataService extends Service {
           await new Promise((resolve) => setTimeout(resolve, 2000));
         } catch (error) {
           logger.error(`Error searching for ${term}:`, error);
+          watchTermCounts[term] = 0;
           // Continue with other terms even if one fails
         }
       }
+
+      // Track pre-deduplication count
+      const totalFetched = allPosts.length;
 
       // Remove duplicates and limit total results
       const uniquePosts = this.deduplicatePosts(allPosts);
       const limitedPosts = uniquePosts.slice(0, this.maxTweetsPerCycle);
 
+      // Calculate duplicate statistics
+      const duplicateCount = totalFetched - uniquePosts.length;
+      const duplicateRatio = totalFetched > 0 ? duplicateCount / totalFetched : 0;
+
+      // Get time range of fetched tweets
+      let oldestTweetTime: number | undefined;
+      let newestTweetTime: number | undefined;
+      if (limitedPosts.length > 0) {
+        const timestamps = limitedPosts.map((p) => p.timestamp).filter((t) => t);
+        if (timestamps.length > 0) {
+          oldestTweetTime = Math.min(...timestamps);
+          newestTweetTime = Math.max(...timestamps);
+        }
+      }
+
+      // Create fetch statistics
+      this.lastFetchStats = {
+        timestamp: Date.now(),
+        fetchedCount: totalFetched,
+        uniqueCount: uniquePosts.length,
+        duplicateCount,
+        duplicateRatio,
+        oldestTweetTime,
+        newestTweetTime,
+        processingTimeMs: Date.now() - fetchStartTime,
+        watchTermsFound: watchTermCounts,
+        cursorUsed: this.lastCursor !== null,
+      };
+
       // Update last fetch timestamp
       this.lastFetchTimestamp = Date.now();
 
-      logger.info(`Fetched ${limitedPosts.length} unique tweets from RapidAPI`);
+      logger.info(
+        `Fetched ${limitedPosts.length} unique tweets from RapidAPI ` +
+          `(${totalFetched} total, ${duplicateCount} duplicates, ${(duplicateRatio * 100).toFixed(1)}% dup rate)`
+      );
       return limitedPosts;
     } catch (error) {
       logger.error('Error fetching tweets from RapidAPI:', error);
@@ -143,19 +191,37 @@ export class RapidAPIDataService extends Service {
    * Calculate the cutoff timestamp based on environment and configuration
    * In development: Use relaxed time window to ensure tweets are available for testing
    * In production: Use proper incremental processing based on last processed timestamp
+   * On first run: Use longer time window to populate initial data
    */
   private calculateCutoffTimestamp(sinceTimestamp?: number): number {
     const isDevelopment = process.env.NODE_ENV === 'development';
+    const isFirstRun = this.isFirstRun();
+    const bootstrapMode = process.env.SENTIMENT_BOOTSTRAP_MODE || 'auto';
+
+    // Check if we should use enhanced first-run data collection
+    const shouldUseFirstRunWindow =
+      (bootstrapMode === 'auto' && isFirstRun) || bootstrapMode === 'force';
 
     if (isDevelopment) {
       // Development: Use longer time window to ensure data availability for testing
       const devTimeWindow = parseInt(
-        process.env.SENTIMENT_DEV_TIME_WINDOW || '216000000', // 60 hours default
+        process.env.SENTIMENT_DEV_TIME_WINDOW || '21600000', // 6 hours default (updated from 60h)
         10
       );
       const cutoff = Date.now() - devTimeWindow;
       logger.debug(
         `Development mode: Using relaxed cutoff timestamp (${devTimeWindow / 1000 / 60 / 60} hours ago)`
+      );
+      return cutoff;
+    }
+
+    if (shouldUseFirstRunWindow) {
+      // First run or forced bootstrap: Use longer time window for initial data population
+      const firstRunHours = parseInt(process.env.SENTIMENT_FIRST_RUN_HOURS || '6', 10);
+      const firstRunWindow = firstRunHours * 60 * 60 * 1000; // Convert hours to ms
+      const cutoff = Date.now() - firstRunWindow;
+      logger.info(
+        `First run detected: Using enhanced ${firstRunHours}h time window for initial data population`
       );
       return cutoff;
     }
@@ -703,5 +769,15 @@ export class RapidAPIDataService extends Service {
     if (process.env.NODE_ENV === 'development') {
       logger.info('Development mode: Processed tweet cache cleared for fresh testing');
     }
+  }
+
+  /**
+   * Detect if this is the first run of the sentiment analyzer
+   * Based on whether we have any processed tweets and no previous fetch timestamp
+   */
+  private isFirstRun(): boolean {
+    const hasNoProcessedTweets = this.processedTweetIds.size === 0;
+    const hasNoLastFetchTimestamp = this.lastFetchTimestamp === 0;
+    return hasNoProcessedTweets && hasNoLastFetchTimestamp;
   }
 }

@@ -8,6 +8,10 @@ import {
   RapidAPIDataService,
   SentimentAggregatorService,
   StartupService,
+  TrafficAnalyzerService,
+  DynamicSchedulerService,
+  SentimentAlertsService,
+  DiscordReportingService,
 } from './services/index.ts';
 
 export * from './types.ts';
@@ -39,18 +43,27 @@ export const sentimentAnalyzerPlugin: Plugin = {
   services: [
     StartupService, // Must be first to initialize tasks
     SentimentPersistenceService, // Must be second to provide storage foundation
+    TrafficAnalyzerService, // Traffic analysis for dynamic scheduling
+    DynamicSchedulerService, // Dynamic interval management
+    DiscordReportingService, // Discord integration for sentiment reports
     SentimentAnalysisService,
+    SentimentAlertsService, // Real-time alerts for high-importance negative sentiment
     RapidAPIDataService, // Real Twitter data via RapidAPI
     SentimentAggregatorService,
   ],
 
   // Actions that users can trigger
-  actions: [actions.sentimentReportAction, actions.processSentimentAction],
+  actions: [
+    actions.sentimentReportAction,
+    actions.processSentimentAction,
+    actions.searchTweetsAction,
+  ],
 
   // Providers that supply context to conversations
   providers: [
     providers.sentimentDataProvider,
     providers.sentimentTrendsProvider,
+    providers.topSentimentTweetsProvider,
     providers.actionsProvider,
   ],
 
@@ -96,12 +109,25 @@ export const sentimentAnalyzerPlugin: Plugin = {
       SENTIMENT_PROCESSING_INTERVAL:
         config.SENTIMENT_PROCESSING_INTERVAL ||
         process.env.SENTIMENT_PROCESSING_INTERVAL ||
-        '300000', // 5 minutes
+        '300000', // 5 minutes (fallback for when dynamic scheduling is disabled)
+      SENTIMENT_NOMINAL_INTERVAL:
+        config.SENTIMENT_NOMINAL_INTERVAL || process.env.SENTIMENT_NOMINAL_INTERVAL || '1800000', // 30 minutes nominal
+      SENTIMENT_MIN_INTERVAL:
+        config.SENTIMENT_MIN_INTERVAL || process.env.SENTIMENT_MIN_INTERVAL || '60000', // 1 minute minimum
+      SENTIMENT_MAX_INTERVAL:
+        config.SENTIMENT_MAX_INTERVAL || process.env.SENTIMENT_MAX_INTERVAL || '14400000', // 4 hours maximum
       TWITTER_MAX_TWEETS_PER_CYCLE:
         config.TWITTER_MAX_TWEETS_PER_CYCLE || process.env.TWITTER_MAX_TWEETS_PER_CYCLE || '50',
       SENTIMENT_MAX_HISTORY:
         config.SENTIMENT_MAX_HISTORY || process.env.SENTIMENT_MAX_HISTORY || '10000',
       DISCORD_REPORT_CHANNEL: config.DISCORD_REPORT_CHANNEL || process.env.DISCORD_REPORT_CHANNEL,
+      // Enhanced startup data population settings (all optional)
+      SENTIMENT_FIRST_RUN_HOURS:
+        config.SENTIMENT_FIRST_RUN_HOURS || process.env.SENTIMENT_FIRST_RUN_HOURS || '6', // 6 hours of initial data
+      SENTIMENT_BOOTSTRAP_MODE:
+        config.SENTIMENT_BOOTSTRAP_MODE || process.env.SENTIMENT_BOOTSTRAP_MODE || 'auto', // auto-detect first run
+      SENTIMENT_DEV_TIME_WINDOW:
+        config.SENTIMENT_DEV_TIME_WINDOW || process.env.SENTIMENT_DEV_TIME_WINDOW || '21600000', // 6 hours in ms for dev mode
     };
 
     // Set environment variables for services to use
@@ -114,7 +140,13 @@ export const sentimentAnalyzerPlugin: Plugin = {
     logger.info('✅ Sentiment Analyzer Plugin configuration loaded');
     logger.info(`Watch terms: ${sentimentConfig.SENTIMENT_WATCH_TERMS}`);
     logger.info(
-      `Processing interval: ${parseInt(sentimentConfig.SENTIMENT_PROCESSING_INTERVAL, 10) / 1000 / 60} minutes`
+      `Dynamic scheduling enabled: Nominal ${parseInt(sentimentConfig.SENTIMENT_NOMINAL_INTERVAL, 10) / 1000 / 60}min, ` +
+        `Min ${parseInt(sentimentConfig.SENTIMENT_MIN_INTERVAL, 10) / 1000 / 60}min, ` +
+        `Max ${parseInt(sentimentConfig.SENTIMENT_MAX_INTERVAL, 10) / 1000 / 60}min`
+    );
+    logger.info(
+      `Enhanced startup: First run data window ${sentimentConfig.SENTIMENT_FIRST_RUN_HOURS}h, ` +
+        `Bootstrap mode: ${sentimentConfig.SENTIMENT_BOOTSTRAP_MODE}`
     );
   },
 };

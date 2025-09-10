@@ -7,6 +7,7 @@ import type {
   ExtractedTopic,
 } from '../types.ts';
 import type { SentimentPersistenceService } from './persistence.ts';
+import type { SentimentAlertsService } from './sentiment-alerts.ts';
 
 /**
  * SentimentAnalysisService handles the core sentiment scoring functionality
@@ -18,6 +19,7 @@ export class SentimentAnalysisService extends Service {
 
   private watchTerms: string[] = ['ai16z', 'elizaos', 'eliza', '@ai16zdao', '@elizaos'];
   private persistenceService: SentimentPersistenceService;
+  private alertsService: SentimentAlertsService;
 
   constructor(runtime: IAgentRuntime) {
     super(runtime);
@@ -26,6 +28,9 @@ export class SentimentAnalysisService extends Service {
     this.persistenceService = runtime.getService(
       'sentiment-persistence'
     ) as SentimentPersistenceService;
+
+    // Get alerts service
+    this.alertsService = runtime.getService('sentiment-alerts') as SentimentAlertsService;
 
     // Load watch terms from environment or runtime settings
     const envWatchTerms =
@@ -174,6 +179,19 @@ export class SentimentAnalysisService extends Service {
         } catch (error) {
           logger.warn(`[SENTIMENT_ANALYSIS] Failed to store sentiment analysis ${post.id}:`, error);
         }
+      }
+
+      // Evaluate for real-time alerts (non-blocking)
+      if (this.alertsService) {
+        try {
+          this.alertsService.evaluateForAlert(processedSentiment, post).catch((error) => {
+            logger.warn(`[SENTIMENT_ANALYSIS] Alert evaluation failed for post ${post.id}:`, error);
+          });
+        } catch (error) {
+          logger.warn(`[SENTIMENT_ANALYSIS] Alert evaluation error for post ${post.id}:`, error);
+        }
+      } else {
+        logger.debug('[SENTIMENT_ANALYSIS] Alerts service not available');
       }
 
       return processedSentiment;

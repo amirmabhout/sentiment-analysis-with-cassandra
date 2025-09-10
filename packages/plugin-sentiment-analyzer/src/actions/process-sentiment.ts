@@ -23,6 +23,9 @@ export const processSentimentAction: Action = {
       'start sentiment',
       'fetch sentiment',
       'update sentiment',
+      'bootstrap sentiment',
+      'initial sentiment',
+      'startup sentiment',
     ];
 
     return triggers.some((trigger) => text.includes(trigger));
@@ -83,9 +86,27 @@ export const processSentimentAction: Action = {
       // Step 1: Fetch recent social media posts
       const startTime = Date.now();
       logger.info(`[PROCESS_SENTIMENT] Starting data fetch phase...`);
-      const posts = await (rapidApiDataService as any).fetchRecentTweets(
-        Date.now() - 10 * 60 * 1000
-      );
+
+      // Check if this is a bootstrap request (for initial data population)
+      const text = message.content?.text?.toLowerCase() || '';
+      const isBootstrapRequest =
+        text.includes('bootstrap') || text.includes('initial') || text.includes('startup');
+
+      let sinceTimestamp: number;
+      if (isBootstrapRequest) {
+        // Bootstrap mode: use longer time window for initial data population
+        const firstRunHours = parseInt(process.env.SENTIMENT_FIRST_RUN_HOURS || '6', 10);
+        sinceTimestamp = Date.now() - firstRunHours * 60 * 60 * 1000;
+        logger.info(
+          `[PROCESS_SENTIMENT] Bootstrap mode: fetching ${firstRunHours}h of historical data`
+        );
+      } else {
+        // Normal mode: fetch recent data only
+        sinceTimestamp = Date.now() - 10 * 60 * 1000;
+        logger.info(`[PROCESS_SENTIMENT] Normal mode: fetching 10 minutes of recent data`);
+      }
+
+      const posts = await (rapidApiDataService as any).fetchRecentTweets(sinceTimestamp);
       logger.info(`[PROCESS_SENTIMENT] Fetch phase complete: ${posts.length} posts from RapidAPI`);
 
       // Log post attribution distribution after fetch
