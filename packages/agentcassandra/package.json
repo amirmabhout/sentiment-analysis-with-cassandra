@@ -30,6 +30,7 @@
     "@elizaos/cli": "latest",
     "@elizaos/core": "workspace:*",
     "@elizaos/plugin-bootstrap": "workspace:*",
+    "@elizaos/plugin-twitter": "latest",
     "@elizaos/plugin-discord": "latest",
     "@elizaos/plugin-google-genai": "latest",
     "@elizaos/plugin-sentiment-analyzer": "workspace:*",

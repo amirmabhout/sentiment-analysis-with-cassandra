@@ -13,6 +13,16 @@ A framework for multi-agent development and deployment
 - **`packages/agentcassandra/`** - The Cassandra agent implementation with specialized personality for sentiment analysis
 - **`packages/plugin-sentiment-analyzer/`** - Comprehensive sentiment analysis plugin providing real-time monitoring capabilities
 
+## 🚨 Before You Begin
+
+**READ THIS FIRST**: This software can be configured to use third-party Twitter data services that may violate Twitter's Terms of Service. Users are responsible for ensuring compliance with all applicable terms and policies. Consider using official Twitter API for production use.
+
+### Prerequisites & Legal Considerations
+- Ensure you have proper API access and authorization
+- Review Twitter's Developer Agreement if using Twitter data
+- Understand the legal implications of your intended use case
+- This software is intended for educational, research, and personal use
+
 ### 🚀 Quick Start with Cassandra
 
 1. **Install dependencies:**
@@ -39,7 +49,7 @@ A framework for multi-agent development and deployment
 
 Cassandra leverages the sentiment analyzer plugin to provide:
 
-- **🔍 Real-time Twitter Monitoring** - Automatically fetches tweets via RapidAPI integration
+- **🔍 Real-time Social Media Monitoring** - Configurable data source integration (supports both official and third-party APIs)
 - **🧠 Advanced LLM Sentiment Analysis** - Uses OpenAI/Anthropic/Google models for accurate sentiment scoring
 - **📊 Entity & Topic Extraction** - Identifies key people, organizations, and themes in conversations
 - **📈 Trend Analysis & Aggregation** - Statistical analysis of sentiment changes over time
@@ -48,25 +58,45 @@ Cassandra leverages the sentiment analyzer plugin to provide:
 - **💬 Discord Integration** - Automated reporting and alerts in Discord channels (any other client such as telegram, etc is possible with Eliza's plug and play clients)
 - **💾 Historical Data Persistence** - Maintains sentiment history for comprehensive trend analysis
 
-### ⚙️ Required Configuration
+## 🔧 Configuration
 
-Set these environment variables in `packages/agentcassandra/.env`:
+**Before proceeding, ensure you have proper authorization to access social media APIs.**
 
+### API Keys Required
+
+#### Official Twitter/X API (Recommended for Production)
+For compliance with Twitter/X Terms of Service, consider using their official API:
 ```bash
-# LLM Provider (choose one)
+# Official Twitter API v2
+TWITTER_BEARER_TOKEN=your_official_twitter_token
+TWITTER_API_KEY=your_twitter_api_key
+TWITTER_API_SECRET_KEY=your_twitter_api_secret_key
+```
+
+#### Alternative: Third-Party Services (Use at Your Own Risk)
+```bash
+# RapidAPI (Third-party service - may violate Twitter ToS)
+RAPIDAPI_API_KEY=your_rapidapi_key
+RAPIDAPI_X_HOST=your_rapidapi_host
+```
+
+**⚠️ Warning**: Using third-party Twitter data services may violate Twitter's Terms of Service and could result in your Twitter account being suspended.
+
+#### LLM Provider (Required)
+```bash
+# Choose one
 OPENAI_API_KEY=your_openai_key
 # OR ANTHROPIC_API_KEY=your_anthropic_key
 # OR GOOGLE_GENERATIVE_AI_API_KEY=your_google_key
+```
 
-# RapidAPI for Twitter data (REQUIRED)
-RAPIDAPI_API_KEY=your_rapidapi_key
-RAPIDAPI_X_HOST=your_rapidapi_host
-
+#### Optional Integration
+```bash
 # Discord Bot (optional, for reporting)
 DISCORD_API_TOKEN=your_discord_bot_token
 DISCORD_REPORT_CHANNEL=your_channel_id
 
-# Optional: Customize monitoring
+# Customize monitoring
 SENTIMENT_WATCH_TERMS=ai16z,elizaos,eliza
 ```
 
@@ -77,6 +107,49 @@ Ask Cassandra for insights:
 - "What's the current sentiment around ai16z?"
 - "Show me the weekly sentiment analysis"
 - "Are there any sentiment spikes I should know about?"
+
+## ⚠️ Legal Disclaimer and Terms of Service Compliance
+
+**IMPORTANT: Please read before using this software.**
+
+### Third-Party API Usage
+This software is designed to work with third-party Twitter/X data providers (such as RapidAPI services). **The use of such services may violate Twitter/X's Terms of Service.**
+
+### User Responsibility
+- **You are solely responsible** for ensuring compliance with all applicable Terms of Service, including Twitter/X's Developer Agreement and Terms of Service
+- **You are responsible** for obtaining proper API access and following rate limits
+- **This software is provided for educational and research purposes**
+- The maintainers of this repository do not endorse or encourage violation of any platform's Terms of Service
+
+### Legal Compliance
+- Users must comply with all applicable laws and regulations in their jurisdiction
+- Users must respect platform rate limits, user privacy, and content policies
+- Users should consider using official Twitter/X API services for production use
+
+### No Warranty
+This software is provided "AS IS" without warranty of any kind. The maintainers are not responsible for any consequences resulting from the use of this software.
+
+By using this software, you acknowledge that you understand and accept these terms.
+
+## 📋 Compliance and Best Practices
+
+### Recommended Usage
+- **Research and Educational Purposes**: This tool is ideal for academic research, personal learning, and educational projects
+- **Small-Scale Monitoring**: Suitable for monitoring specific keywords for personal or small business use
+- **Prototype Development**: Perfect for building proof-of-concepts before moving to official APIs
+
+### Production Usage Recommendations
+For production applications, we strongly recommend:
+1. Using Twitter's official API v2
+2. Applying for appropriate access levels through Twitter Developer Portal
+3. Implementing proper rate limiting and data handling
+4. Following Twitter's Developer Agreement and Policy
+
+### Data Handling
+- Respect user privacy and data protection regulations (GDPR, CCPA, etc.)
+- Implement appropriate data retention policies
+- Secure API keys and sensitive data
+- Do not store personal data unnecessarily
 
 ---
 

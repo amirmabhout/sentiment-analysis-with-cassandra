@@ -2,6 +2,10 @@
 
 AI agent specialized in sentiment tracking for ai16z & elizaOS brands across social media platforms.
 
+## ⚠️ Legal Notice
+
+**IMPORTANT**: This software may use third-party Twitter data services that could violate Twitter's Terms of Service. Users are solely responsible for ensuring compliance with all applicable platform policies. Consider using official Twitter API for production use. This software is provided for educational and research purposes.
+
 ## Features
 
 - Real-time sentiment analysis for ai16z & elizaOS brand mentions
@@ -14,22 +18,54 @@ AI agent specialized in sentiment tracking for ai16z & elizaOS brands across soc
 
 ## Getting Started
 
+**Before proceeding, ensure you have proper authorization to access social media APIs.**
+
 ```bash
 # Install dependencies
 bun install
 
 # Configure environment variables
 cp .env.example .env
-# Edit .env with your API keys and MCP server URL:
-# - MCP_SERVER_URL=https://sequencer-v2.heurist.xyz/tool[YOUR_SERVER_ID]/sse
-# - OPENAI_API_KEY=your_openai_key (or ANTHROPIC_API_KEY, GOOGLE_GENAI_API_KEY)
-# - DISCORD_API_TOKEN=your_discord_token (optional, for reporting)
+# Edit .env with your API keys - see Configuration section for details
+# ⚠️ WARNING: Using third-party Twitter services may violate Twitter ToS
 
 # Start the sentiment tracking agent
 elizaos start
 
 # For development with hot-reloading
 elizaos dev
+```
+
+## Configuration
+
+### API Keys Required
+
+#### Official Twitter/X API (Recommended)
+For compliance with Twitter/X Terms of Service:
+```bash
+TWITTER_BEARER_TOKEN=your_official_twitter_token
+TWITTER_API_KEY=your_twitter_api_key
+```
+
+#### Alternative: Third-Party Services (Use at Your Own Risk)
+```bash
+# RapidAPI (Third-party service - may violate Twitter ToS)
+RAPIDAPI_API_KEY=your_rapidapi_key
+RAPIDAPI_X_HOST=your_rapidapi_host
+```
+
+#### LLM Provider (Required)
+```bash
+# Choose one
+OPENAI_API_KEY=your_openai_key
+# OR ANTHROPIC_API_KEY=your_anthropic_key
+# OR GOOGLE_GENAI_API_KEY=your_google_key
+```
+
+#### Optional Integration
+```bash
+# Discord Bot (optional, for reporting)
+DISCORD_API_TOKEN=your_discord_token
 ```
 
 ## Development

@@ -2,9 +2,13 @@
 
 A comprehensive sentiment analysis plugin for ElizaOS that tracks social media sentiment around ai16z and elizaOS. This plugin provides real-time monitoring, trend analysis, and automated reporting capabilities.
 
+## ⚠️ Legal Disclaimer
+
+**IMPORTANT**: This plugin may use third-party Twitter data services that could violate Twitter's Terms of Service. Users are solely responsible for ensuring compliance with all applicable platform policies. Consider using official Twitter API for production use. This plugin is provided for educational and research purposes.
+
 ## Features
 
-- **Real-time Twitter Monitoring**: Automatically fetches tweets mentioning configured watch terms
+- **Real-time Social Media Monitoring**: Configurable data source integration (supports both official and third-party APIs)
 - **Advanced Sentiment Analysis**: Uses LLM models to score sentiment with confidence levels
 - **Entity & Topic Extraction**: Identifies key people, organizations, and themes in conversations
 - **Trend Analysis**: Tracks sentiment changes over time with statistical analysis
@@ -22,23 +26,42 @@ This plugin is designed to work within the ElizaOS ecosystem. It depends on:
 
 ## Configuration
 
+**Before configuring, ensure you have proper authorization to access social media APIs.**
+
 Configure the plugin using environment variables:
 
 ### Required Configuration
 
+#### Official Twitter/X API (Recommended for Production)
+For compliance with Twitter/X Terms of Service:
 ```bash
-# LLM API Key (choose one)
+# Official Twitter API v2
+TWITTER_BEARER_TOKEN=your_official_twitter_token
+TWITTER_API_KEY=your_twitter_api_key
+TWITTER_API_SECRET_KEY=your_twitter_api_secret_key
+```
+
+#### Alternative: Third-Party Services (Use at Your Own Risk)
+```bash
+# RapidAPI (Third-party service - may violate Twitter ToS)
+RAPIDAPI_API_KEY=your_rapidapi_key
+RAPIDAPI_X_HOST=your_rapidapi_host
+```
+
+**⚠️ Warning**: Using third-party Twitter data services may violate Twitter's Terms of Service.
+
+#### LLM Provider (Required)
+```bash
+# Choose one
 OPENAI_API_KEY=your_openai_key
 # OR
 ANTHROPIC_API_KEY=your_anthropic_key
 # OR
 GOOGLE_GENAI_API_KEY=your_google_key
+```
 
-# Twitter API credentials (for data fetching)
-TWITTER_USERNAME=your_twitter_username
-TWITTER_PASSWORD=your_twitter_password
-TWITTER_EMAIL=your_twitter_email
-
+#### Optional Integration
+```bash
 # Discord Bot Token (for reporting)
 DISCORD_API_TOKEN=your_discord_bot_token
 ```
@@ -47,6 +70,7 @@ DISCORD_API_TOKEN=your_discord_bot_token
 
 ```bash
 # Watch terms to monitor (comma-separated)
+# ⚠️ PRIVACY NOTICE: Ensure monitored terms comply with user privacy and platform policies
 SENTIMENT_WATCH_TERMS=ai16z,elizaos,eliza
 
 # Processing interval in milliseconds (default: 5 minutes)
@@ -61,6 +85,13 @@ SENTIMENT_MAX_HISTORY=10000
 # Discord channel ID for reports (optional)
 DISCORD_REPORT_CHANNEL=your_channel_id
 ```
+
+### Compliance and Best Practices
+
+- **Respect Rate Limits**: Follow platform API rate limits
+- **User Privacy**: Comply with data protection regulations (GDPR, CCPA, etc.)
+- **Content Policies**: Respect platform content and usage policies
+- **Official APIs**: Consider using official Twitter API for production deployments
 
 ## Usage
 

@@ -5,7 +5,7 @@ import * as providers from './providers/index.ts';
 import {
   SentimentPersistenceService,
   SentimentAnalysisService,
-  RapidAPIDataService,
+  TwitterDataService,
   SentimentAggregatorService,
   StartupService,
   TrafficAnalyzerService,
@@ -25,15 +25,17 @@ export * from './providers/index.ts';
  * This plugin provides comprehensive sentiment analysis capabilities for tracking
  * social media sentiment around ai16z and elizaOS. It includes:
  *
- * - Real-time Twitter stream monitoring
+ * - Real-time Twitter data monitoring (official API preferred, RapidAPI fallback)
  * - Sentiment scoring using LLM models
  * - Entity and topic extraction
  * - Trend analysis and aggregation
  * - Discord reporting and alerts
  * - Recurring automated processing
+ * - Legal compliance through official API preference
  *
- * The plugin integrates with existing Twitter and Discord plugins to provide
- * a complete sentiment tracking solution.
+ * The plugin automatically chooses the most appropriate data source:
+ * 1. Official Twitter API (recommended for compliance)
+ * 2. RapidAPI (educational/research use with legal warnings)
  */
 export const sentimentAnalyzerPlugin: Plugin = {
   name: 'sentiment-analyzer',
@@ -48,7 +50,7 @@ export const sentimentAnalyzerPlugin: Plugin = {
     DiscordReportingService, // Discord integration for sentiment reports
     SentimentAnalysisService,
     SentimentAlertsService, // Real-time alerts for high-importance negative sentiment
-    RapidAPIDataService, // Real Twitter data via RapidAPI
+    TwitterDataService, // Unified Twitter data service (official API preferred, RapidAPI fallback)
     SentimentAggregatorService,
   ],
 
@@ -89,18 +91,33 @@ export const sentimentAnalyzerPlugin: Plugin = {
       );
     }
 
-    // Validate RapidAPI configuration - REQUIRED
+    // Validate Twitter API configuration - Check for either official or RapidAPI
+    const hasOfficialTwitter = 
+      (config.TWITTER_BEARER_TOKEN || process.env.TWITTER_BEARER_TOKEN) ||
+      ((config.TWITTER_API_KEY || process.env.TWITTER_API_KEY) && 
+       (config.TWITTER_API_SECRET_KEY || process.env.TWITTER_API_SECRET_KEY));
+       
     const hasRapidApiKey = config.RAPIDAPI_API_KEY || process.env.RAPIDAPI_API_KEY;
     const hasRapidApiHost = config.RAPIDAPI_X_HOST || process.env.RAPIDAPI_X_HOST;
+    const hasRapidAPI = hasRapidApiKey && hasRapidApiHost;
 
-    if (!hasRapidApiKey || !hasRapidApiHost) {
-      logger.error('❌ RapidAPI configuration incomplete - sentiment analysis will not work');
-      logger.error('REQUIRED: Set RAPIDAPI_API_KEY and RAPIDAPI_X_HOST environment variables');
-      logger.error('Optional: Set RAPIDAPI_APP_NAME for custom app identification');
-      throw new Error('RapidAPI configuration required for sentiment analysis plugin');
+    if (!hasOfficialTwitter && !hasRapidAPI) {
+      logger.error('❌ No Twitter API configuration found - sentiment analysis will not work');
+      logger.error('📋 RECOMMENDED (compliant with Twitter ToS):');
+      logger.error('   Set TWITTER_BEARER_TOKEN or (TWITTER_API_KEY + TWITTER_API_SECRET_KEY)');
+      logger.error('📋 ALTERNATIVE (educational/research only):');
+      logger.error('   Set RAPIDAPI_API_KEY and RAPIDAPI_X_HOST');
+      logger.error('⚠️  WARNING: RapidAPI usage may violate Twitter Terms of Service');
+      throw new Error('Twitter API credentials required - see logs for configuration options');
     }
 
-    logger.info('✅ RapidAPI configuration found - sentiment analysis ready');
+    if (hasOfficialTwitter) {
+      logger.info('✅ Official Twitter API configuration found - using compliant data source');
+    } else if (hasRapidAPI) {
+      logger.warn('⚠️  RapidAPI configuration found - using third-party data source');
+      logger.warn('⚠️  LEGAL WARNING: This may violate Twitter Terms of Service');
+      logger.warn('⚠️  Consider upgrading to official Twitter API for production use');
+    }
 
     // Set up configuration with defaults
     const sentimentConfig = {

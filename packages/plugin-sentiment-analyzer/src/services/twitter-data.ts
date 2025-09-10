@@ -1,0 +1,676 @@
+import { Service, type IAgentRuntime, logger } from '@elizaos/core';
+import type { SocialMediaPost } from '../types.ts';
+import type { FetchStatistics } from './traffic-analyzer';
+
+/**
+ * Unified Twitter Data Service that intelligently chooses between official and third-party APIs
+ * 
+ * This service provides legal compliance by preferring official Twitter API when available,
+ * while falling back to RapidAPI for educational/research purposes when explicitly configured.
+ * 
+ * Environment Variable Priority:
+ * 1. If TWITTER_BEARER_TOKEN is set -> Use Official Twitter API v2
+ * 2. If RAPIDAPI_API_KEY is set -> Use RapidAPI (with legal warnings)
+ * 3. If neither -> Fail with clear instructions
+ */
+export class TwitterDataService extends Service {
+  static serviceType = 'twitter-data';
+  capabilityDescription = 'Unified Twitter data service supporting both official API and third-party services';
+
+  private dataProvider: 'official' | 'rapidapi' | null = null;
+  private watchTerms: string[] = ['ai16z', 'elizaos'];
+  private lastFetchTimestamp: number = 0;
+  private processedTweetIds: Set<string> = new Set();
+  private maxTweetsPerCycle = 50;
+  private lastFetchStats?: FetchStatistics;
+
+  // Official Twitter API configuration
+  private twitterBearerToken: string = '';
+  private twitterApiKey: string = '';
+  private twitterApiSecretKey: string = '';
+
+  // RapidAPI configuration (fallback)
+  private rapidApiKey: string = '';
+  private rapidApiHost: string = 'twitter241.p.rapidapi.com';
+  private rapidApiAppName: string = '';
+  private lastCursor: string | null = null;
+
+  constructor(runtime: IAgentRuntime) {
+    super(runtime);
+    this.loadConfiguration();
+  }
+
+  static async start(runtime: IAgentRuntime): Promise<TwitterDataService> {
+    logger.info('🚀 Starting Unified Twitter Data Service');
+    const service = new TwitterDataService(runtime);
+    return service;
+  }
+
+  async stop(): Promise<void> {
+    logger.info('🚀 Stopping Unified Twitter Data Service');
+    this.processedTweetIds.clear();
+  }
+
+  private loadConfiguration(): void {
+    // Check for official Twitter API credentials first
+    this.twitterBearerToken = 
+      (this.runtime.getSetting('TWITTER_BEARER_TOKEN') as string) || 
+      process.env.TWITTER_BEARER_TOKEN || '';
+    
+    this.twitterApiKey = 
+      (this.runtime.getSetting('TWITTER_API_KEY') as string) || 
+      process.env.TWITTER_API_KEY || '';
+    
+    this.twitterApiSecretKey = 
+      (this.runtime.getSetting('TWITTER_API_SECRET_KEY') as string) || 
+      process.env.TWITTER_API_SECRET_KEY || '';
+
+    // Check for RapidAPI credentials as fallback
+    this.rapidApiKey =
+      (this.runtime.getSetting('RAPIDAPI_API_KEY') as string) || 
+      process.env.RAPIDAPI_API_KEY || '';
+
+    const rapidApiHost =
+      (this.runtime.getSetting('RAPIDAPI_X_HOST') as string) || 
+      process.env.RAPIDAPI_X_HOST;
+    if (rapidApiHost) {
+      this.rapidApiHost = rapidApiHost;
+    }
+
+    this.rapidApiAppName =
+      (this.runtime.getSetting('RAPIDAPI_APP_NAME') as string) ||
+      process.env.RAPIDAPI_APP_NAME ||
+      'default-application_11000772';
+
+    // Determine which data provider to use
+    if (this.twitterBearerToken || (this.twitterApiKey && this.twitterApiSecretKey)) {
+      this.dataProvider = 'official';
+      logger.info('✅ Official Twitter API credentials found - using official API (recommended for compliance)');
+      logger.info('🔒 This configuration complies with Twitter Terms of Service');
+    } else if (this.rapidApiKey) {
+      this.dataProvider = 'rapidapi';
+      logger.warn('⚠️  Using RapidAPI as fallback - LEGAL WARNING:');
+      logger.warn('⚠️  Third-party Twitter services may violate Twitter Terms of Service');
+      logger.warn('⚠️  Your Twitter account may be suspended');
+      logger.warn('⚠️  This configuration is for educational/research purposes only');
+      logger.warn('⚠️  Consider upgrading to official Twitter API for production use');
+    } else {
+      this.dataProvider = null;
+      logger.error('❌ No Twitter API credentials found');
+      logger.error('📋 To use official Twitter API (recommended):');
+      logger.error('   Set TWITTER_BEARER_TOKEN or (TWITTER_API_KEY + TWITTER_API_SECRET_KEY)');
+      logger.error('📋 To use RapidAPI (educational/research only):');
+      logger.error('   Set RAPIDAPI_API_KEY and RAPIDAPI_X_HOST');
+      logger.error('⚠️  WARNING: RapidAPI usage may violate Twitter Terms of Service');
+      throw new Error('Twitter API credentials required - see logs for configuration options');
+    }
+
+    // Load common configuration
+    const envWatchTerms =
+      (this.runtime.getSetting('SENTIMENT_WATCH_TERMS') as string) ||
+      process.env.SENTIMENT_WATCH_TERMS;
+    if (envWatchTerms) {
+      try {
+        this.watchTerms = envWatchTerms.split(',').map((term: string) => term.trim());
+      } catch (error) {
+        logger.warn('Failed to parse SENTIMENT_WATCH_TERMS, using defaults');
+      }
+    }
+
+    const maxTweets =
+      (this.runtime.getSetting('TWITTER_MAX_TWEETS_PER_CYCLE') as string) ||
+      process.env.TWITTER_MAX_TWEETS_PER_CYCLE;
+    if (maxTweets) {
+      const parsed = parseInt(maxTweets, 10);
+      // Official API can handle more, RapidAPI is limited to 20
+      const maxAllowed = this.dataProvider === 'rapidapi' ? 20 : 100;
+      this.maxTweetsPerCycle = Math.min(parsed || maxAllowed, maxAllowed);
+    }
+
+    logger.info(
+      `Twitter Data Service Config - Provider: ${this.dataProvider}, Watch terms: ${this.watchTerms.join(', ')}, Max tweets: ${this.maxTweetsPerCycle}`
+    );
+
+    if (process.env.NODE_ENV === 'development') {
+      logger.info('Development mode: Starting with cleared processed tweet cache');
+      this.processedTweetIds.clear();
+    }
+  }
+
+  /**
+   * Get the last fetch statistics
+   */
+  getLastFetchStatistics(): FetchStatistics | undefined {
+    return this.lastFetchStats;
+  }
+
+  /**
+   * Fetch recent tweets using the configured provider
+   */
+  async fetchRecentTweets(sinceTimestamp?: number): Promise<SocialMediaPost[]> {
+    if (!this.dataProvider) {
+      logger.error('No Twitter data provider configured');
+      return [];
+    }
+
+    const fetchStartTime = Date.now();
+    const cutoffTimestamp = this.calculateCutoffTimestamp(sinceTimestamp);
+
+    logger.info(
+      `Fetching tweets since ${new Date(cutoffTimestamp).toISOString()} via ${this.dataProvider} API`
+    );
+
+    try {
+      let allPosts: SocialMediaPost[] = [];
+      
+      if (this.dataProvider === 'official') {
+        allPosts = await this.fetchViaOfficialAPI(cutoffTimestamp);
+      } else if (this.dataProvider === 'rapidapi') {
+        allPosts = await this.fetchViaRapidAPI(cutoffTimestamp);
+      }
+
+      // Common post-processing
+      const totalFetched = allPosts.length;
+      const uniquePosts = this.deduplicatePosts(allPosts);
+      const limitedPosts = uniquePosts.slice(0, this.maxTweetsPerCycle);
+
+      // Calculate statistics
+      const duplicateCount = totalFetched - uniquePosts.length;
+      const duplicateRatio = totalFetched > 0 ? duplicateCount / totalFetched : 0;
+
+      let oldestTweetTime: number | undefined;
+      let newestTweetTime: number | undefined;
+      if (limitedPosts.length > 0) {
+        const timestamps = limitedPosts.map((p) => p.timestamp).filter((t) => t);
+        if (timestamps.length > 0) {
+          oldestTweetTime = Math.min(...timestamps);
+          newestTweetTime = Math.max(...timestamps);
+        }
+      }
+
+      // Create fetch statistics
+      this.lastFetchStats = {
+        timestamp: Date.now(),
+        fetchedCount: totalFetched,
+        uniqueCount: uniquePosts.length,
+        duplicateCount,
+        duplicateRatio,
+        oldestTweetTime,
+        newestTweetTime,
+        processingTimeMs: Date.now() - fetchStartTime,
+        watchTermsFound: this.watchTerms.reduce((acc, term) => {
+          acc[term] = limitedPosts.filter(post => 
+            post.searchTerms?.includes(term) || post.searchContext === term
+          ).length;
+          return acc;
+        }, {} as Record<string, number>),
+        cursorUsed: this.dataProvider === 'rapidapi' && this.lastCursor !== null,
+      };
+
+      this.lastFetchTimestamp = Date.now();
+
+      logger.info(
+        `Fetched ${limitedPosts.length} unique tweets via ${this.dataProvider} ` +
+        `(${totalFetched} total, ${duplicateCount} duplicates, ${(duplicateRatio * 100).toFixed(1)}% dup rate)`
+      );
+      
+      return limitedPosts;
+    } catch (error) {
+      logger.error(`Error fetching tweets from ${this.dataProvider}:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Fetch tweets using official Twitter API v2
+   */
+  private async fetchViaOfficialAPI(cutoffTimestamp: number): Promise<SocialMediaPost[]> {
+    logger.info('📡 Using Official Twitter API v2 (compliant with ToS)');
+    const allPosts: SocialMediaPost[] = [];
+    
+    for (const term of this.watchTerms) {
+      try {
+        logger.info(`Searching official Twitter API for: ${term}`);
+        
+        // Use Twitter API v2 recent search endpoint
+        const query = encodeURIComponent(`${term} -is:retweet lang:en`);
+        const maxResults = Math.min(this.maxTweetsPerCycle, 100); // API limit is 100
+        
+        let url = `https://api.twitter.com/2/tweets/search/recent?query=${query}&max_results=${maxResults}`;
+        url += '&tweet.fields=created_at,public_metrics,context_annotations,lang,referenced_tweets';
+        url += '&user.fields=username,name,description,public_metrics,verified';
+        url += '&expansions=author_id';
+        
+        // Add time filter
+        if (cutoffTimestamp > 0) {
+          const startTime = new Date(cutoffTimestamp).toISOString();
+          url += `&start_time=${startTime}`;
+        }
+
+        const headers: Record<string, string> = {};
+        if (this.twitterBearerToken) {
+          headers.Authorization = `Bearer ${this.twitterBearerToken}`;
+        } else if (this.twitterApiKey && this.twitterApiSecretKey) {
+          // Use OAuth 1.0a if we have API keys
+          // This is a simplified version - in production you'd want proper OAuth signing
+          logger.warn('OAuth 1.0a not fully implemented - use Bearer token for best results');
+          continue;
+        }
+
+        const response = await fetch(url, { headers });
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          logger.error(`Official Twitter API request failed: ${response.status} ${response.statusText} - ${errorText}`);
+          continue;
+        }
+
+        const data = await response.json();
+        const posts = this.transformOfficialAPIResponse(data, term, cutoffTimestamp);
+        allPosts.push(...posts);
+        
+        logger.info(`Found ${posts.length} posts for term: ${term} via official API`);
+        
+        // Rate limiting: Twitter API v2 allows 300 requests per 15min window
+        await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
+        
+      } catch (error) {
+        logger.error(`Error searching official API for ${term}:`, error);
+      }
+    }
+    
+    return allPosts;
+  }
+
+  /**
+   * Fetch tweets using RapidAPI (fallback with legal warnings)
+   */
+  private async fetchViaRapidAPI(cutoffTimestamp: number): Promise<SocialMediaPost[]> {
+    logger.warn('📡 Using RapidAPI (third-party) - ⚠️  LEGAL RISK: May violate Twitter ToS');
+    const allPosts: SocialMediaPost[] = [];
+    
+    for (const term of this.watchTerms) {
+      try {
+        logger.info(`Searching RapidAPI for: ${term}`);
+        const posts = await this.searchRapidAPIForTerm(term, cutoffTimestamp);
+        allPosts.push(...posts);
+        logger.info(`Found ${posts.length} posts for term: ${term} via RapidAPI`);
+        
+        // Be more conservative with RapidAPI rate limiting
+        await new Promise(resolve => setTimeout(resolve, 3000)); // 3 second delay
+        
+      } catch (error) {
+        logger.error(`Error searching RapidAPI for ${term}:`, error);
+      }
+    }
+    
+    return allPosts;
+  }
+
+  /**
+   * Transform official Twitter API v2 response to SocialMediaPost format
+   */
+  private transformOfficialAPIResponse(
+    apiResponse: any,
+    searchTerm: string,
+    cutoffTimestamp: number
+  ): SocialMediaPost[] {
+    const posts: SocialMediaPost[] = [];
+    
+    try {
+      const tweets = apiResponse.data || [];
+      const users = apiResponse.includes?.users || [];
+      
+      // Create user lookup map
+      const userMap = new Map();
+      for (const user of users) {
+        userMap.set(user.id, user);
+      }
+      
+      logger.info(`Processing ${tweets.length} tweets from official API for term: ${searchTerm}`);
+      
+      for (const tweet of tweets) {
+        try {
+          const user = userMap.get(tweet.author_id);
+          if (!user) {
+            logger.debug(`No user data found for tweet: ${tweet.id}`);
+            continue;
+          }
+          
+          const timestamp = new Date(tweet.created_at).getTime();
+          
+          // Skip if too old
+          if (timestamp < cutoffTimestamp) {
+            continue;
+          }
+          
+          // Skip if already processed
+          if (this.processedTweetIds.has(tweet.id)) {
+            continue;
+          }
+          
+          const post: SocialMediaPost = {
+            id: tweet.id,
+            platform: 'twitter',
+            author: {
+              id: user.id,
+              username: user.username,
+              name: user.name,
+              followerCount: user.public_metrics?.followers_count || 0,
+              description: user.description || '',
+              followingCount: user.public_metrics?.following_count || 0,
+              verified: user.verified || false,
+              statusesCount: user.public_metrics?.tweet_count || 0,
+            },
+            content: {
+              text: tweet.text,
+              url: `https://twitter.com/${user.username}/status/${tweet.id}`,
+              hasMedia: false, // Would need to check attachments
+              isRetweet: tweet.referenced_tweets?.some((ref: any) => ref.type === 'retweeted') || false,
+              isReply: tweet.referenced_tweets?.some((ref: any) => ref.type === 'replied_to') || false,
+            },
+            metrics: {
+              likes: tweet.public_metrics?.like_count || 0,
+              retweets: tweet.public_metrics?.retweet_count || 0,
+              replies: tweet.public_metrics?.reply_count || 0,
+              views: tweet.public_metrics?.impression_count || 0,
+            },
+            timestamp,
+            conversationId: tweet.conversation_id || `conv_${tweet.id}`,
+            searchContext: searchTerm,
+            searchTerms: [searchTerm],
+            attributionSource: 'search' as const,
+          };
+          
+          posts.push(post);
+          this.processedTweetIds.add(tweet.id);
+          
+        } catch (error) {
+          logger.warn(`Error processing tweet ${tweet.id}:`, error);
+        }
+      }
+      
+    } catch (error) {
+      logger.error(`Error transforming official API response for ${searchTerm}:`, error);
+    }
+    
+    return posts;
+  }
+
+  /**
+   * Search RapidAPI for a specific term (reusing existing RapidAPI logic)
+   */
+  private async searchRapidAPIForTerm(
+    term: string,
+    cutoffTimestamp: number
+  ): Promise<SocialMediaPost[]> {
+    const url = `https://${this.rapidApiHost}/search-v2`;
+
+    const params = new URLSearchParams({
+      type: 'Latest',
+      count: Math.min(this.maxTweetsPerCycle, 20).toString(), // RapidAPI limit is 20
+      query: term,
+    });
+
+    if (this.lastCursor) {
+      params.append('cursor', this.lastCursor);
+    }
+
+    const headers = {
+      'x-rapidapi-key': this.rapidApiKey,
+      'x-rapidapi-host': this.rapidApiHost,
+      'User-Agent': `${this.rapidApiAppName}/1.0`,
+    };
+
+    logger.debug(`Making RapidAPI request: ${url}?${params.toString()}`);
+
+    const response = await fetch(`${url}?${params.toString()}`, {
+      method: 'GET',
+      headers,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      logger.error(
+        `RapidAPI request failed: ${response.status} ${response.statusText} - ${errorText}`
+      );
+      throw new Error(`RapidAPI request failed: ${response.status}`);
+    }
+
+    const data = await response.json();
+    
+    if (data.cursor?.bottom) {
+      this.lastCursor = data.cursor.bottom;
+    }
+
+    // Reuse the existing RapidAPI transformation logic
+    return this.transformRapidAPIResponse(data, term, cutoffTimestamp);
+  }
+
+  /**
+   * Transform RapidAPI response (simplified version of existing logic)
+   */
+  private transformRapidAPIResponse(
+    apiResponse: any,
+    searchTerm: string,
+    cutoffTimestamp: number
+  ): SocialMediaPost[] {
+    const posts: SocialMediaPost[] = [];
+    
+    try {
+      const timeline = apiResponse.result?.timeline;
+      if (!timeline || !timeline.instructions) {
+        return posts;
+      }
+
+      const addEntriesInstruction = timeline.instructions.find(
+        (instruction: any) => instruction.type === 'TimelineAddEntries'
+      );
+
+      if (!addEntriesInstruction || !addEntriesInstruction.entries) {
+        return posts;
+      }
+
+      for (const entry of addEntriesInstruction.entries) {
+        try {
+          if (entry.entryId?.startsWith('cursor-')) continue;
+          
+          if (entry.content?.itemContent?.itemType === 'TimelineTweet') {
+            const post = this.transformRapidAPITweetEntry(entry, searchTerm, cutoffTimestamp);
+            if (post) {
+              posts.push(post);
+            }
+          }
+        } catch (error) {
+          logger.warn(`Failed to transform RapidAPI entry ${entry.entryId}:`, error);
+        }
+      }
+    } catch (error) {
+      logger.error(`Error transforming RapidAPI response for ${searchTerm}:`, error);
+    }
+    
+    return posts;
+  }
+
+  /**
+   * Transform a single RapidAPI tweet entry (simplified version)
+   */
+  private transformRapidAPITweetEntry(
+    entry: any,
+    searchTerm: string,
+    cutoffTimestamp: number
+  ): SocialMediaPost | null {
+    try {
+      const tweetData = entry.content?.itemContent?.tweet_results?.result;
+      if (!tweetData) return null;
+
+      const tweet = tweetData?.__typename === 'TweetWithVisibilityResults' ? tweetData.tweet : tweetData;
+      if (!tweet) return null;
+
+      const tweetId = tweet.rest_id || tweet.id || entry.entryId?.replace('tweet-', '');
+      if (!tweetId || this.processedTweetIds.has(tweetId)) return null;
+
+      const text = tweet.legacy?.full_text || tweet.full_text || tweet.text || '';
+      if (!text) return null;
+
+      const createdAt = tweet.legacy?.created_at || tweet.created_at;
+      const timestamp = this.parseTwitterTimestamp(createdAt) || Date.now();
+      
+      if (timestamp < cutoffTimestamp) return null;
+
+      const userResult = tweet.core?.user_results?.result;
+      const userId = userResult?.rest_id || userResult?.id || `user_${tweetId}`;
+      const username = userResult?.legacy?.screen_name || userResult?.screen_name || `user_${userId}`;
+      const displayName = userResult?.legacy?.name || userResult?.name || username;
+
+      const post: SocialMediaPost = {
+        id: tweetId,
+        platform: 'twitter',
+        author: {
+          id: userId,
+          username: username,
+          name: displayName,
+          followerCount: userResult?.legacy?.followers_count || 0,
+          description: userResult?.legacy?.description || '',
+        },
+        content: {
+          text: text,
+          url: `https://twitter.com/${username}/status/${tweetId}`,
+          hasMedia: false,
+          isRetweet: false,
+          isReply: false,
+        },
+        metrics: {
+          likes: tweet.legacy?.favorite_count || 0,
+          retweets: tweet.legacy?.retweet_count || 0,
+          replies: tweet.legacy?.reply_count || 0,
+          views: 0,
+        },
+        timestamp,
+        conversationId: tweet.legacy?.conversation_id_str || `conv_${tweetId}`,
+        searchContext: searchTerm,
+        searchTerms: [searchTerm],
+        attributionSource: 'search' as const,
+      };
+
+      this.processedTweetIds.add(tweetId);
+      return post;
+    } catch (error) {
+      logger.warn(`Error transforming RapidAPI tweet entry:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Parse Twitter timestamp format
+   */
+  private parseTwitterTimestamp(timestamp: string): number | null {
+    if (!timestamp) return null;
+    try {
+      const date = new Date(timestamp);
+      return date.getTime();
+    } catch (error) {
+      return null;
+    }
+  }
+
+  /**
+   * Calculate cutoff timestamp for fetching
+   */
+  private calculateCutoffTimestamp(sinceTimestamp?: number): number {
+    const isDevelopment = process.env.NODE_ENV === 'development';
+    const isFirstRun = this.isFirstRun();
+    
+    if (isDevelopment) {
+      const devTimeWindow = parseInt(process.env.SENTIMENT_DEV_TIME_WINDOW || '21600000', 10);
+      return Date.now() - devTimeWindow;
+    }
+    
+    if (isFirstRun) {
+      const firstRunHours = parseInt(process.env.SENTIMENT_FIRST_RUN_HOURS || '6', 10);
+      return Date.now() - (firstRunHours * 60 * 60 * 1000);
+    }
+    
+    return sinceTimestamp || this.lastFetchTimestamp || Date.now() - 10 * 60 * 1000;
+  }
+
+  /**
+   * Remove duplicate posts and merge attribution data
+   */
+  private deduplicatePosts(posts: SocialMediaPost[]): SocialMediaPost[] {
+    const postMap = new Map<string, SocialMediaPost>();
+
+    for (const post of posts) {
+      const existingPost = postMap.get(post.id);
+      if (existingPost) {
+        // Merge search terms
+        const existingTerms = existingPost.searchTerms || [existingPost.searchContext].filter(Boolean);
+        const newTerms = post.searchTerms || [post.searchContext].filter(Boolean);
+        const mergedTerms = [...new Set([...existingTerms, ...newTerms])];
+        
+        postMap.set(post.id, {
+          ...existingPost,
+          searchTerms: mergedTerms,
+        });
+      } else {
+        postMap.set(post.id, {
+          ...post,
+          searchTerms: post.searchTerms || [post.searchContext].filter(Boolean),
+        });
+      }
+    }
+
+    return Array.from(postMap.values());
+  }
+
+  /**
+   * Check if this is the first run
+   */
+  private isFirstRun(): boolean {
+    return this.processedTweetIds.size === 0 && this.lastFetchTimestamp === 0;
+  }
+
+  /**
+   * Get current configuration status
+   */
+  getConfigurationStatus(): {
+    provider: string;
+    isOfficialAPI: boolean;
+    isCompliant: boolean;
+    watchTerms: string[];
+    maxTweetsPerCycle: number;
+  } {
+    return {
+      provider: this.dataProvider || 'none',
+      isOfficialAPI: this.dataProvider === 'official',
+      isCompliant: this.dataProvider === 'official',
+      watchTerms: [...this.watchTerms],
+      maxTweetsPerCycle: this.maxTweetsPerCycle,
+    };
+  }
+
+  /**
+   * Get watch terms
+   */
+  getWatchTerms(): string[] {
+    return [...this.watchTerms];
+  }
+
+  /**
+   * Update watch terms
+   */
+  updateWatchTerms(terms: string[]): void {
+    this.watchTerms = terms;
+    logger.info(`Updated Twitter Data Service watch terms: ${terms.join(', ')}`);
+  }
+
+  /**
+   * Clear processed tweet cache
+   */
+  clearProcessedTweets(): void {
+    this.processedTweetIds.clear();
+    this.lastFetchTimestamp = 0;
+    this.lastCursor = null;
+    logger.info('Cleared processed tweet cache and cursor');
+  }
+}
