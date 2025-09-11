@@ -605,8 +605,8 @@ export class TwitterDataService extends Service {
         // Use current time as fallback instead of failing
       }
 
-      // Skip if too old (only if we have a valid timestamp)
-      if (timestamp && timestamp < cutoffTimestamp) {
+      // Skip if too old (only for Official API - RapidAPI relies on deduplication)
+      if (timestamp && cutoffTimestamp > 0 && timestamp < cutoffTimestamp) {
         logger.info(
           `Tweet too old, skipping: ${tweetId}, tweet time: ${new Date(timestamp).toISOString()}, cutoff: ${new Date(cutoffTimestamp).toISOString()}`
         );
@@ -781,6 +781,14 @@ export class TwitterDataService extends Service {
     const isDevelopment = process.env.NODE_ENV === 'development';
     const isFirstRun = this.isFirstRun();
     
+    // For RapidAPI, we don't need time filtering since it always returns latest tweets
+    // and we rely on processedTweetIds for deduplication
+    if (this.dataProvider === 'rapidapi') {
+      logger.debug('[TwitterData] RapidAPI provider: Using minimal cutoff timestamp (relying on deduplication)');
+      return 0; // Effectively disable time-based filtering for RapidAPI
+    }
+    
+    // For Official API, use proper time-based filtering since it supports it
     if (isDevelopment) {
       const devTimeWindow = parseInt(process.env.SENTIMENT_DEV_TIME_WINDOW || '21600000', 10);
       return Date.now() - devTimeWindow;
