@@ -443,9 +443,13 @@ export class TwitterDataService extends Service {
     }
 
     const data = await response.json();
+    logger.debug(
+      `RapidAPI response received - hasCursor: ${!!data.cursor}, hasResult: ${!!data.result}, hasTimeline: ${!!data.result?.timeline}`
+    );
     
     if (data.cursor?.bottom) {
       this.lastCursor = data.cursor.bottom;
+      logger.debug(`Updated cursor: ${this.lastCursor}`);
     }
 
     // Reuse the existing RapidAPI transformation logic
@@ -453,7 +457,7 @@ export class TwitterDataService extends Service {
   }
 
   /**
-   * Transform RapidAPI response (simplified version of existing logic)
+   * Transform RapidAPI response with comprehensive logging and parsing
    */
   private transformRapidAPIResponse(
     apiResponse: any,
@@ -463,42 +467,85 @@ export class TwitterDataService extends Service {
     const posts: SocialMediaPost[] = [];
     
     try {
+      logger.debug(`Processing Twitter API response for term: ${searchTerm}`);
+
+      // Navigate through the complex Twitter API v2 structure
       const timeline = apiResponse.result?.timeline;
       if (!timeline || !timeline.instructions) {
+        logger.warn('No timeline instructions found in API response');
         return posts;
       }
 
+      // Find TimelineAddEntries instruction
       const addEntriesInstruction = timeline.instructions.find(
         (instruction: any) => instruction.type === 'TimelineAddEntries'
       );
 
       if (!addEntriesInstruction || !addEntriesInstruction.entries) {
+        logger.warn('No TimelineAddEntries instruction found');
         return posts;
       }
 
+      logger.info(
+        `Processing ${addEntriesInstruction.entries.length} entries for term: ${searchTerm}`
+      );
+
+      // Track parsing statistics
+      let processedCount = 0;
+      let successfulCount = 0;
+      let cursorEntries = 0;
+      let nonTweetEntries = 0;
+
+      // Process each timeline entry
       for (const entry of addEntriesInstruction.entries) {
         try {
-          if (entry.entryId?.startsWith('cursor-')) continue;
-          
+          processedCount++;
+
+          // Skip cursor entries
+          if (entry.entryId?.startsWith('cursor-')) {
+            cursorEntries++;
+            logger.debug(`Skipping cursor entry: ${entry.entryId}`);
+            continue;
+          }
+
+          // Check if it's a tweet entry
           if (entry.content?.itemContent?.itemType === 'TimelineTweet') {
+            logger.debug(`Processing TimelineTweet entry: ${entry.entryId}`);
             const post = this.transformRapidAPITweetEntry(entry, searchTerm, cutoffTimestamp);
             if (post) {
               posts.push(post);
+              successfulCount++;
+              logger.debug(`✓ Successfully transformed tweet ${post.id}`);
+            } else {
+              logger.debug(`✗ Failed to transform tweet entry: ${entry.entryId}`);
             }
+          } else {
+            nonTweetEntries++;
+            logger.debug(
+              `Skipping non-tweet entry: ${entry.entryId}, type: ${entry.content?.itemContent?.itemType}`
+            );
           }
         } catch (error) {
-          logger.warn(`Failed to transform RapidAPI entry ${entry.entryId}:`, error);
+          logger.warn(`Failed to transform entry ${entry.entryId}:`, String(error));
         }
       }
+
+      // Log transformation summary
+      logger.info(
+        `Transformation summary for ${searchTerm}: ` +
+          `${successfulCount}/${processedCount} entries transformed. ` +
+          `Skipped: ${cursorEntries} cursors, ${nonTweetEntries} non-tweets.`
+      );
     } catch (error) {
-      logger.error(`Error transforming RapidAPI response for ${searchTerm}:`, error);
+      logger.error(`Error transforming Twitter API response for ${searchTerm}:`, String(error));
     }
-    
+
+    logger.info(`Transformed ${posts.length} posts for term: ${searchTerm}`);
     return posts;
   }
 
   /**
-   * Transform a single RapidAPI tweet entry (simplified version)
+   * Transform a single RapidAPI tweet entry with enhanced parsing and debugging
    */
   private transformRapidAPITweetEntry(
     entry: any,
@@ -506,27 +553,166 @@ export class TwitterDataService extends Service {
     cutoffTimestamp: number
   ): SocialMediaPost | null {
     try {
+      logger.debug(`Processing tweet entry: ${entry.entryId}`);
+
+      // Skip cursor entries
+      if (entry.entryId?.startsWith('cursor-')) {
+        logger.debug(`Skipping cursor entry: ${entry.entryId}`);
+        return null;
+      }
+
       const tweetData = entry.content?.itemContent?.tweet_results?.result;
-      if (!tweetData) return null;
+      if (!tweetData) {
+        logger.debug(`No tweet_results.result found for entry: ${entry.entryId}`);
+        return null;
+      }
 
-      const tweet = tweetData?.__typename === 'TweetWithVisibilityResults' ? tweetData.tweet : tweetData;
-      if (!tweet) return null;
+      // Handle TweetWithVisibilityResults wrapper
+      const tweet =
+        tweetData?.__typename === 'TweetWithVisibilityResults' ? tweetData.tweet : tweetData;
+      if (!tweet) {
+        logger.debug(`No tweet data found after unwrapping for entry: ${entry.entryId}`);
+        return null;
+      }
 
+      // Extract tweet ID with multiple fallbacks
       const tweetId = tweet.rest_id || tweet.id || entry.entryId?.replace('tweet-', '');
-      if (!tweetId || this.processedTweetIds.has(tweetId)) return null;
+      if (!tweetId) {
+        logger.debug(`No tweet ID found for entry: ${entry.entryId}`);
+        return null;
+      }
 
-      const text = tweet.legacy?.full_text || tweet.full_text || tweet.text || '';
-      if (!text) return null;
+      // Extract tweet text with comprehensive fallbacks
+      const text =
+        tweet.legacy?.full_text ||
+        tweet.full_text ||
+        tweet.note_tweet?.note_tweet_results?.result?.text ||
+        tweet.text ||
+        tweet.legacy?.text ||
+        '';
 
+      if (!text || text.length === 0) {
+        logger.debug(`No tweet text found for tweet: ${tweetId}`);
+        return null;
+      }
+
+      // Extract timestamp with fallbacks
       const createdAt = tweet.legacy?.created_at || tweet.created_at;
-      const timestamp = this.parseTwitterTimestamp(createdAt) || Date.now();
-      
-      if (timestamp < cutoffTimestamp) return null;
+      const timestamp = this.parseTwitterTimestamp(createdAt);
 
+      if (!timestamp) {
+        logger.debug(`No valid timestamp found for tweet: ${tweetId}, createdAt: ${createdAt}`);
+        // Use current time as fallback instead of failing
+      }
+
+      // Skip if too old (only if we have a valid timestamp)
+      if (timestamp && timestamp < cutoffTimestamp) {
+        logger.info(
+          `Tweet too old, skipping: ${tweetId}, tweet time: ${new Date(timestamp).toISOString()}, cutoff: ${new Date(cutoffTimestamp).toISOString()}`
+        );
+        return null;
+      }
+
+      // Skip if already processed
+      if (this.processedTweetIds.has(tweetId)) {
+        logger.info(
+          `Tweet already processed, skipping: ${tweetId} (${this.processedTweetIds.size} total processed tweets in cache)`
+        );
+        return null;
+      }
+
+      // Extract user information with enhanced profiling and fallbacks
       const userResult = tweet.core?.user_results?.result;
+      if (!userResult) {
+        logger.debug(`No user data found for tweet: ${tweetId}`);
+        // Don't fail - create minimal user data
+      }
+
+      // Extract user fields with comprehensive fallbacks
       const userId = userResult?.rest_id || userResult?.id || `user_${tweetId}`;
-      const username = userResult?.legacy?.screen_name || userResult?.screen_name || `user_${userId}`;
-      const displayName = userResult?.legacy?.name || userResult?.name || username;
+
+      const username =
+        userResult?.core?.screen_name ||
+        userResult?.legacy?.screen_name ||
+        userResult?.screen_name ||
+        `user_${userId}`;
+
+      const displayName =
+        userResult?.core?.name || userResult?.legacy?.name || userResult?.name || username;
+
+      const userDescription = userResult?.legacy?.description || userResult?.description || '';
+
+      // Enhanced user metrics for influence scoring with fallbacks
+      const followerCount = userResult?.legacy?.followers_count || userResult?.followers_count || 0;
+
+      const followingCount =
+        userResult?.legacy?.friends_count ||
+        userResult?.friends_count ||
+        userResult?.following_count ||
+        0;
+
+      const isVerified =
+        userResult?.legacy?.verified ||
+        userResult?.is_blue_verified ||
+        userResult?.verified ||
+        false;
+
+      const statusesCount =
+        userResult?.legacy?.statuses_count ||
+        userResult?.statuses_count ||
+        userResult?.tweet_count ||
+        0;
+
+      // Extract engagement metrics with fallbacks
+      const likes =
+        tweet.legacy?.favorite_count ||
+        tweet.favorite_count ||
+        tweet.public_metrics?.like_count ||
+        0;
+
+      const retweets =
+        tweet.legacy?.retweet_count ||
+        tweet.retweet_count ||
+        tweet.public_metrics?.retweet_count ||
+        0;
+
+      const replies =
+        tweet.legacy?.reply_count || tweet.reply_count || tweet.public_metrics?.reply_count || 0;
+
+      const views = tweet.views?.count
+        ? parseInt(tweet.views.count)
+        : tweet.public_metrics?.impression_count || 0;
+
+      // Check for media with fallbacks
+      const hasMedia = !!(
+        tweet.legacy?.extended_entities?.media ||
+        tweet.legacy?.entities?.media ||
+        tweet.attachments?.media ||
+        tweet.entities?.media
+      );
+
+      // Check if it's a retweet or reply with fallbacks
+      const isRetweet = !!(
+        tweet.legacy?.retweeted_status ||
+        tweet.retweeted_status ||
+        tweet.referenced_tweets?.some((ref: any) => ref.type === 'retweeted')
+      );
+
+      const isReply = !!(
+        tweet.legacy?.in_reply_to_status_id_str ||
+        tweet.in_reply_to_status_id ||
+        tweet.referenced_tweets?.some((ref: any) => ref.type === 'replied_to')
+      );
+
+      // Build URL with fallback username
+      const tweetUrl = `https://twitter.com/${username}/status/${tweetId}`;
+
+      // Use current time if no timestamp available
+      const finalTimestamp = timestamp || Date.now();
+
+      logger.debug(
+        `Successfully transformed tweet: ${tweetId}, text length: ${text.length}, user: ${username}`
+      );
 
       const post: SocialMediaPost = {
         id: tweetId,
@@ -535,33 +721,39 @@ export class TwitterDataService extends Service {
           id: userId,
           username: username,
           name: displayName,
-          followerCount: userResult?.legacy?.followers_count || 0,
-          description: userResult?.legacy?.description || '',
+          followerCount: followerCount,
+          // Add additional user profiling data as metadata
+          ...(userDescription && { description: userDescription }),
+          ...(followingCount && { followingCount }),
+          ...(isVerified && { verified: isVerified }),
+          ...(statusesCount && { statusesCount }),
         },
         content: {
           text: text,
-          url: `https://twitter.com/${username}/status/${tweetId}`,
-          hasMedia: false,
-          isRetweet: false,
-          isReply: false,
+          url: tweetUrl,
+          hasMedia: hasMedia,
+          isRetweet: isRetweet,
+          isReply: isReply,
         },
         metrics: {
-          likes: tweet.legacy?.favorite_count || 0,
-          retweets: tweet.legacy?.retweet_count || 0,
-          replies: tweet.legacy?.reply_count || 0,
-          views: 0,
+          likes: likes,
+          retweets: retweets,
+          replies: replies,
+          views: views,
         },
-        timestamp,
-        conversationId: tweet.legacy?.conversation_id_str || `conv_${tweetId}`,
-        searchContext: searchTerm,
-        searchTerms: [searchTerm],
-        attributionSource: 'search' as const,
+        timestamp: finalTimestamp,
+        conversationId:
+          tweet.legacy?.conversation_id_str || tweet.conversation_id || `conv_${tweetId}`,
+        searchContext: searchTerm, // Keep for backward compatibility
+        searchTerms: [searchTerm], // Initialize with the search term that found this post
+        attributionSource: 'search', // This post was found via search
       };
 
       this.processedTweetIds.add(tweetId);
+      logger.debug(`Tweet ${tweetId} processed successfully for term: ${searchTerm}`);
       return post;
     } catch (error) {
-      logger.warn(`Error transforming RapidAPI tweet entry:`, error);
+      logger.warn(`Error transforming tweet entry ${entry.entryId}:`, String(error));
       return null;
     }
   }
@@ -571,10 +763,13 @@ export class TwitterDataService extends Service {
    */
   private parseTwitterTimestamp(timestamp: string): number | null {
     if (!timestamp) return null;
+
     try {
+      // Twitter format: "Mon Sep 08 08:59:55 +0000 2025"
       const date = new Date(timestamp);
       return date.getTime();
     } catch (error) {
+      logger.debug('Failed to parse Twitter timestamp:', timestamp);
       return null;
     }
   }
