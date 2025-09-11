@@ -42,7 +42,7 @@ export const processSentimentAction: Action = {
 
     try {
       // Get all required services
-      const rapidApiDataService = runtime.getService('rapidapi-data');
+      const twitterDataService = runtime.getService('twitter-data');
       const sentimentService = runtime.getService('sentiment-analysis');
       const aggregatorService = runtime.getService('sentiment-aggregator');
 
@@ -62,12 +62,12 @@ export const processSentimentAction: Action = {
         };
       }
 
-      if (!rapidApiDataService || !(rapidApiDataService as any).isRapidAPIConfigured()) {
-        const error = 'RapidAPI service not configured';
+      if (!twitterDataService) {
+        const error = 'Twitter data service not configured';
         logger.error(`[PROCESS_SENTIMENT] ${error}`);
 
         await callback({
-          text: `❌ Cannot process sentiment: ${error}. Please ensure RAPIDAPI_API_KEY and RAPIDAPI_X_HOST are set.`,
+          text: `❌ Cannot process sentiment: ${error}. Please ensure Twitter API credentials are set (TWITTER_BEARER_TOKEN or RAPIDAPI_API_KEY).`,
           action: 'PROCESS_SENTIMENT',
         });
 
@@ -106,8 +106,8 @@ export const processSentimentAction: Action = {
         logger.info(`[PROCESS_SENTIMENT] Normal mode: fetching 10 minutes of recent data`);
       }
 
-      const posts = await (rapidApiDataService as any).fetchRecentTweets(sinceTimestamp);
-      logger.info(`[PROCESS_SENTIMENT] Fetch phase complete: ${posts.length} posts from RapidAPI`);
+      const posts = await (twitterDataService as any).fetchRecentTweets(sinceTimestamp);
+      logger.info(`[PROCESS_SENTIMENT] Fetch phase complete: ${posts.length} posts from Twitter`);
 
       // Log post attribution distribution after fetch
       if (posts.length > 0) {

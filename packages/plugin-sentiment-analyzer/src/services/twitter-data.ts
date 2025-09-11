@@ -53,34 +53,39 @@ export class TwitterDataService extends Service {
 
   private loadConfiguration(): void {
     // Check for official Twitter API credentials first
+    const runtimeTwitterBearerToken = this.runtime.getSetting('TWITTER_BEARER_TOKEN') as string;
     this.twitterBearerToken = 
-      (this.runtime.getSetting('TWITTER_BEARER_TOKEN') as string) || 
-      process.env.TWITTER_BEARER_TOKEN || '';
+      (runtimeTwitterBearerToken && runtimeTwitterBearerToken.trim()) ? runtimeTwitterBearerToken : 
+      (process.env.TWITTER_BEARER_TOKEN || '');
     
+    const runtimeTwitterApiKey = this.runtime.getSetting('TWITTER_API_KEY') as string;
     this.twitterApiKey = 
-      (this.runtime.getSetting('TWITTER_API_KEY') as string) || 
-      process.env.TWITTER_API_KEY || '';
+      (runtimeTwitterApiKey && runtimeTwitterApiKey.trim()) ? runtimeTwitterApiKey : 
+      (process.env.TWITTER_API_KEY || '');
     
+    const runtimeTwitterApiSecretKey = this.runtime.getSetting('TWITTER_API_SECRET_KEY') as string;
     this.twitterApiSecretKey = 
-      (this.runtime.getSetting('TWITTER_API_SECRET_KEY') as string) || 
-      process.env.TWITTER_API_SECRET_KEY || '';
+      (runtimeTwitterApiSecretKey && runtimeTwitterApiSecretKey.trim()) ? runtimeTwitterApiSecretKey : 
+      (process.env.TWITTER_API_SECRET_KEY || '');
 
     // Check for RapidAPI credentials as fallback
+    const runtimeRapidApiKey = this.runtime.getSetting('RAPIDAPI_API_KEY') as string;
     this.rapidApiKey =
-      (this.runtime.getSetting('RAPIDAPI_API_KEY') as string) || 
-      process.env.RAPIDAPI_API_KEY || '';
+      (runtimeRapidApiKey && runtimeRapidApiKey.trim()) ? runtimeRapidApiKey : 
+      (process.env.RAPIDAPI_API_KEY || '');
 
-    const rapidApiHost =
-      (this.runtime.getSetting('RAPIDAPI_X_HOST') as string) || 
+    const runtimeRapidApiHost = this.runtime.getSetting('RAPIDAPI_X_HOST') as string;
+    const rapidApiHost = 
+      (runtimeRapidApiHost && runtimeRapidApiHost.trim()) ? runtimeRapidApiHost : 
       process.env.RAPIDAPI_X_HOST;
     if (rapidApiHost) {
       this.rapidApiHost = rapidApiHost;
     }
 
+    const runtimeRapidApiAppName = this.runtime.getSetting('RAPIDAPI_APP_NAME') as string;
     this.rapidApiAppName =
-      (this.runtime.getSetting('RAPIDAPI_APP_NAME') as string) ||
-      process.env.RAPIDAPI_APP_NAME ||
-      'default-application_11000772';
+      (runtimeRapidApiAppName && runtimeRapidApiAppName.trim()) ? runtimeRapidApiAppName :
+      (process.env.RAPIDAPI_APP_NAME || 'default-application_11000772');
 
     // Determine which data provider to use
     if (this.twitterBearerToken || (this.twitterApiKey && this.twitterApiSecretKey)) {
