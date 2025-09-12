@@ -12,6 +12,7 @@ import {
   DynamicSchedulerService,
   SentimentAlertsService,
   DiscordReportingService,
+  TopVoicesService,
 } from './services/index.ts';
 
 export * from './types.ts';
@@ -52,6 +53,7 @@ export const sentimentAnalyzerPlugin: Plugin = {
     SentimentAlertsService, // Real-time alerts for high-importance negative sentiment
     TwitterDataService, // Unified Twitter data service (official API preferred, RapidAPI fallback)
     SentimentAggregatorService,
+    TopVoicesService, // Top voices aggregation and reporting
   ],
 
   // Actions that users can trigger
@@ -59,6 +61,8 @@ export const sentimentAnalyzerPlugin: Plugin = {
     actions.sentimentReportAction,
     actions.processSentimentAction,
     actions.searchTweetsAction,
+    actions.topVoicesDailyAction,
+    actions.topVoicesWeeklyAction,
   ],
 
   // Providers that supply context to conversations

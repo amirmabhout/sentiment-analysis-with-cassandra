@@ -2,3 +2,5 @@
 export * from './report.ts';
 export * from './process-sentiment.ts';
 export * from './search-tweets.ts';
+export * from './top-voices-daily.ts';
+export * from './top-voices-weekly.ts';

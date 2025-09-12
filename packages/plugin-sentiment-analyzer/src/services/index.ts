@@ -8,3 +8,4 @@ export * from './traffic-analyzer.ts';
 export * from './dynamic-scheduler.ts';
 export * from './sentiment-alerts.ts';
 export * from './discord-reporting.ts';
+export * from './top-voices.ts';

@@ -123,6 +123,34 @@ export interface SentimentAggregation {
 }
 
 /**
+ * Top voice (author with mention count)
+ */
+export interface TopVoice {
+  username: string;
+  name?: string;
+  mentionCount: number;
+  followerCount?: number;
+  averageSentiment?: SentimentScore;
+  platforms: string[];
+}
+
+/**
+ * Top voices report
+ */
+export interface TopVoicesReport {
+  id: string;
+  timeframe: {
+    start: number;
+    end: number;
+    label: string;
+  };
+  totalUniqueAuthors: number;
+  totalMentions: number;
+  topVoices: TopVoice[];
+  generatedAt: number;
+}
+
+/**
  * Configuration for sentiment analysis
  */
 export interface SentimentAnalysisConfig {
@@ -181,6 +209,7 @@ export interface SentimentReport {
     keyPhrases: string[];
     evolution: 'emerging' | 'growing' | 'declining' | 'stable';
   }>;
+  topVoices?: TopVoice[]; // Top voices for the period
 }
 
 /**

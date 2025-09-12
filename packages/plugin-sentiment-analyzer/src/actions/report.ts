@@ -68,6 +68,7 @@ export const sentimentReportAction: Action = {
       // Get required services
       const sentimentService = runtime.getService('sentiment-analysis');
       const aggregatorService = runtime.getService('sentiment-aggregator');
+      const topVoicesService = runtime.getService('top-voices');
 
       if (!sentimentService || !aggregatorService) {
         const errorMsg = 'Sentiment analysis services are not available at the moment.';
@@ -99,6 +100,24 @@ export const sentimentReportAction: Action = {
         timeframe.hours,
         reportType
       );
+
+      // Add top voices to the report if service is available
+      if (topVoicesService) {
+        try {
+          const endTime = Date.now();
+          const startTime = endTime - timeframe.hours * 60 * 60 * 1000;
+          const topVoices = await (topVoicesService as any).getTopVoicesForReport(
+            startTime,
+            endTime,
+            50 // Get top 50 for reports
+          );
+          if (topVoices && topVoices.length > 0) {
+            report.topVoices = topVoices;
+          }
+        } catch (error) {
+          logger.warn('[SentimentReport] Failed to add top voices to report:', error);
+        }
+      }
 
       // Format the report for Discord
       const formattedReport = formatReportForDiscord(report);
@@ -305,6 +324,27 @@ function formatReportForDiscord(report: SentimentReport): string {
     formatted += '\n';
   }
 
+  // Top voices (if available)
+  if (report.topVoices && report.topVoices.length > 0) {
+    formatted += `**Top Voices:**\n`;
+    const voicesToShow = report.topVoices.slice(0, 5); // Show top 5 in main report
+    for (let i = 0; i < voicesToShow.length; i++) {
+      const voice = report.topVoices[i];
+      const rank = i + 1;
+      const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : `${rank}.`;
+      formatted += `${medal} **@${voice.username}** - ${voice.mentionCount} mentions`;
+      if (voice.followerCount) {
+        formatted += ` • ${formatFollowerCount(voice.followerCount)} followers`;
+      }
+      if (voice.averageSentiment) {
+        const voiceEmoji = getSentimentEmoji(voice.averageSentiment.score);
+        formatted += ` ${voiceEmoji}`;
+      }
+      formatted += '\n';
+    }
+    formatted += '\n';
+  }
+
   // Summary insight
   const sentimentLabel = getSentimentLabel(report.overallMetrics.averageSentiment.score);
   formatted += `**Summary:** ${sentimentLabel} sentiment across ${report.overallMetrics.totalVolume} posts. `;
@@ -382,4 +422,16 @@ function getSentimentLabel(score: number): string {
   if (score > -0.2) return 'Neutral';
   if (score > -0.5) return 'Negative';
   return 'Very negative';
+}
+
+/**
+ * Format follower count for display
+ */
+function formatFollowerCount(count: number): string {
+  if (count >= 1000000) {
+    return `${(count / 1000000).toFixed(1)}M`;
+  } else if (count >= 1000) {
+    return `${(count / 1000).toFixed(1)}K`;
+  }
+  return count.toString();
 }
