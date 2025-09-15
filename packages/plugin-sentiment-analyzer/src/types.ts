@@ -63,6 +63,40 @@ export interface SocialMediaPost {
 }
 
 /**
+ * Content category for sentiment analysis
+ */
+export type ContentCategory = 'trading' | 'ecosystem';
+
+/**
+ * Category-specific sentiment data
+ */
+export interface CategorizedSentiment {
+  category: ContentCategory;
+  categoryConfidence: number; // 0-1 confidence in categorization
+  tradingIndicators?: {
+    priceDiscussion: boolean;
+    marketPrediction: boolean;
+    buySellSignal: boolean;
+    chartAnalysis: boolean;
+    profitLossMention: boolean;
+  };
+  technologyIndicators?: {
+    developmentUpdate: boolean;
+    featureDiscussion: boolean;
+    technicalAnalysis: boolean;
+    integrationMention: boolean;
+    bugOrIssueMention: boolean;
+  };
+  communityIndicators?: {
+    partnershipMention: boolean;
+    adoptionDiscussion: boolean;
+    ecosystemGrowth: boolean;
+    communityEvent: boolean;
+    governanceDiscussion: boolean;
+  };
+}
+
+/**
  * Processed sentiment data for a single post
  */
 export interface ProcessedSentiment {
@@ -77,6 +111,7 @@ export interface ProcessedSentiment {
     authorInfluence: number; // 0-1 based on follower count, engagement
     viralityPotential: number; // 0-1 based on engagement metrics
   };
+  categorization?: CategorizedSentiment; // Category classification
 }
 
 /**
@@ -132,6 +167,7 @@ export interface TopVoice {
   followerCount?: number;
   averageSentiment?: SentimentScore;
   platforms: string[];
+  sampleTweetUrls?: string[]; // URLs to recent tweets from this author
 }
 
 /**
@@ -177,6 +213,27 @@ export interface SentimentAnalysisConfig {
 }
 
 /**
+ * Category-specific metrics for reports
+ */
+export interface CategoryMetrics {
+  totalVolume: number;
+  averageSentiment: SentimentScore;
+  volumeChange: number; // percentage change from previous period
+  sentimentChange: number; // change in sentiment score
+  topPositivePosts: Array<{
+    post: SocialMediaPost;
+    sentiment: ProcessedSentiment;
+    importanceScore: number;
+  }>;
+  topNegativePosts: Array<{
+    post: SocialMediaPost;
+    sentiment: ProcessedSentiment;
+    importanceScore: number;
+  }>;
+  dominantIndicators: string[]; // Most common indicators in this category
+}
+
+/**
  * Sentiment report data structure
  */
 export interface SentimentReport {
@@ -195,6 +252,10 @@ export interface SentimentReport {
     volumeChange: number; // percentage change from previous period
     sentimentChange: number; // change in sentiment score
   };
+  categoryMetrics?: {
+    trading: CategoryMetrics;
+    technology: CategoryMetrics;
+  };
   breakdowns: SentimentAggregation[];
   alerts: Array<{
     type: 'sentiment_spike' | 'volume_spike' | 'negative_trend';
@@ -208,6 +269,7 @@ export interface SentimentReport {
     sentiment: SentimentScore;
     keyPhrases: string[];
     evolution: 'emerging' | 'growing' | 'declining' | 'stable';
+    category?: ContentCategory; // Category association for narratives
   }>;
   topVoices?: TopVoice[]; // Top voices for the period
 }

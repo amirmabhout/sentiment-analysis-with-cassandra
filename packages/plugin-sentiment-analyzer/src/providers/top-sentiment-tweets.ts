@@ -115,11 +115,31 @@ export const topSentimentTweetsProvider: Provider = {
         .sort((a, b) => b.importanceScore - a.importanceScore)
         .slice(0, 10);
 
+      // Separate tweets by category
+      const tradingPositive = positiveTweets.filter(
+        (rt) => rt.sentiment.categorization?.category === 'trading'
+      );
+      const tradingNegative = negativeTweets.filter(
+        (rt) => rt.sentiment.categorization?.category === 'trading'
+      );
+      const techPositive = positiveTweets.filter(
+        (rt) => rt.sentiment.categorization?.category === 'ecosystem'
+      );
+      const techNegative = negativeTweets.filter(
+        (rt) => rt.sentiment.categorization?.category === 'ecosystem'
+      );
+
       // Format the context for the agent
       const contextText = formatTopTweetsContext(
         positiveTweets,
         negativeTweets,
-        sentimentResults.length
+        sentimentResults.length,
+        {
+          tradingPositive,
+          tradingNegative,
+          techPositive,
+          techNegative,
+        }
       );
 
       return {
@@ -208,7 +228,13 @@ function calculateImportanceScore(sentiment: ProcessedSentiment, engagementScore
 function formatTopTweetsContext(
   positiveTweets: RankedTweet[],
   negativeTweets: RankedTweet[],
-  totalTweets: number
+  totalTweets: number,
+  categoryBreakdown?: {
+    tradingPositive: RankedTweet[];
+    tradingNegative: RankedTweet[];
+    techPositive: RankedTweet[];
+    techNegative: RankedTweet[];
+  }
 ): string {
   let context = `## Top Influential Sentiment Tweets (Last 24h)\n\n`;
   context += `*Analyzed ${totalTweets} tweets, ranked by author influence + engagement + sentiment strength*\n\n`;
@@ -224,7 +250,10 @@ function formatTopTweetsContext(
       const engagementInfo = formatEngagementInfo(tweet);
       const importance = (rankedTweet.importanceScore * 100).toFixed(0);
 
-      context += `**${index + 1}.** ${authorInfo}\n`;
+      const categoryLabel = sentiment.categorization
+        ? `[${sentiment.categorization.category.toUpperCase()}]`
+        : '';
+      context += `**${index + 1}.** ${authorInfo} ${categoryLabel}\n`;
       context += `   ${sentimentInfo} | ${engagementInfo} | Importance: ${importance}%\n`;
       context += `   "${truncateText(tweet.content.text, 100)}"\n\n`;
     });
@@ -243,12 +272,26 @@ function formatTopTweetsContext(
       const engagementInfo = formatEngagementInfo(tweet);
       const importance = (rankedTweet.importanceScore * 100).toFixed(0);
 
-      context += `**${index + 1}.** ${authorInfo}\n`;
+      const categoryLabel = sentiment.categorization
+        ? `[${sentiment.categorization.category.toUpperCase()}]`
+        : '';
+      context += `**${index + 1}.** ${authorInfo} ${categoryLabel}\n`;
       context += `   ${sentimentInfo} | ${engagementInfo} | Importance: ${importance}%\n`;
       context += `   "${truncateText(tweet.content.text, 100)}"\n\n`;
     });
   } else {
     context += `### 🔴 Negative Tweets\nNo highly negative tweets from influential accounts found.\n\n`;
+  }
+
+  // Category Breakdown if available
+  if (categoryBreakdown) {
+    context += `### 📊 Category Breakdown\n`;
+    context += `**Trading/Speculation:**\n`;
+    context += `• Positive: ${categoryBreakdown.tradingPositive.length} tweets\n`;
+    context += `• Negative: ${categoryBreakdown.tradingNegative.length} tweets\n`;
+    context += `**Technology/Community:**\n`;
+    context += `• Positive: ${categoryBreakdown.techPositive.length} tweets\n`;
+    context += `• Negative: ${categoryBreakdown.techNegative.length} tweets\n\n`;
   }
 
   // Analysis Summary

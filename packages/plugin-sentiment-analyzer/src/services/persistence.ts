@@ -4,6 +4,17 @@ import { v4 } from 'uuid';
 import type { SocialMediaPost, ProcessedSentiment, SentimentReport } from '../types.ts';
 
 /**
+ * Convert sentiment score to human-readable label
+ */
+function getSentimentLabel(score: number): string {
+  if (score > 0.5) return 'Very Positive';
+  if (score > 0.1) return 'Positive';
+  if (score > -0.1) return 'Neutral';
+  if (score > -0.5) return 'Negative';
+  return 'Very Negative';
+}
+
+/**
  * SentimentPersistenceService handles persistent storage of sentiment analysis data
  * Uses ElizaOS standard memory table with proper content structure for compatibility
  */
@@ -121,15 +132,50 @@ export class SentimentPersistenceService extends Service {
     analysis: ProcessedSentiment,
     tweetMemoryId?: UUID | null
   ): Promise<UUID | null> {
-    logger.debug(`[PERSISTENCE] Storing sentiment analysis for post ${analysis.postId}`);
+    logger.debug(
+      `[PERSISTENCE] Checking for duplicate sentiment analysis for post ${analysis.postId}`
+    );
 
     try {
+      // Check for existing sentiment analysis by searching memories with type filter
+      const existing = await this.runtime.getMemories({
+        tableName: 'sentiment_analysis',
+        roomId: this.runtime.agentId,
+        count: 100,
+      });
+
+      // Filter by tweetId in metadata to check for duplicates
+      const duplicateExists = existing.some((memory) => {
+        try {
+          const metadata =
+            typeof memory.metadata === 'string'
+              ? JSON.parse(memory.metadata)
+              : memory.metadata || {};
+          return (
+            metadata.type === 'sentiment_analysis' &&
+            metadata.tweetId === analysis.postId &&
+            metadata.platform === analysis.platform
+          );
+        } catch {
+          return false;
+        }
+      });
+
+      if (duplicateExists) {
+        logger.debug(
+          `[PERSISTENCE] Sentiment analysis for post ${analysis.postId} already exists, skipping storage`
+        );
+        return null;
+      }
+
+      logger.debug(`[PERSISTENCE] Storing new sentiment analysis for post ${analysis.postId}`);
+
       const sentimentMemory = {
         id: asUUID(v4()),
         entityId: this.runtime.agentId,
         agentId: this.runtime.agentId,
         content: {
-          text: `Sentiment analysis for ${analysis.platform} post: ${analysis.sentiment.label} (${analysis.sentiment.score}) - Topics: ${analysis.topics.join(', ')}`, // Main text for embedding generation
+          text: `Sentiment analysis for ${analysis.platform} post: ${getSentimentLabel(analysis.sentiment.score)} (${analysis.sentiment.score.toFixed(2)}) - Topics: ${analysis.topics.map((t) => t.name).join(', ')}`, // Main text for embedding generation
           sentiment_analysis: analysis, // Full analysis data for retrieval
         },
         roomId: this.runtime.agentId,
@@ -194,7 +240,7 @@ export class SentimentPersistenceService extends Service {
         entityId: this.runtime.agentId,
         agentId: this.runtime.agentId,
         content: {
-          text: `Sentiment report ${report.reportType}: ${report.overallMetrics.totalVolume} posts, avg sentiment ${report.overallMetrics.averageSentiment.label} (${report.overallMetrics.averageSentiment.score}), watch terms: ${report.watchTerms.join(', ')}`, // Main text for embedding generation
+          text: `Sentiment report ${report.reportType}: ${report.overallMetrics.totalVolume} posts, avg sentiment ${getSentimentLabel(report.overallMetrics.averageSentiment.score)} (${report.overallMetrics.averageSentiment.score.toFixed(2)}), watch terms: ${report.watchTerms.join(', ')}`, // Main text for embedding generation
           sentiment_report: report, // Full report data for retrieval
         },
         roomId: this.runtime.agentId,

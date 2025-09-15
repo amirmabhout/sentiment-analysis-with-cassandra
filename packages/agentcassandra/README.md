@@ -41,13 +41,16 @@ elizaos dev
 ### API Keys Required
 
 #### Official Twitter/X API (Recommended)
+
 For compliance with Twitter/X Terms of Service:
+
 ```bash
 TWITTER_BEARER_TOKEN=your_official_twitter_token
 TWITTER_API_KEY=your_twitter_api_key
 ```
 
 #### Alternative: Third-Party Services (Use at Your Own Risk)
+
 ```bash
 # RapidAPI (Third-party service - may violate Twitter ToS)
 RAPIDAPI_API_KEY=your_rapidapi_key
@@ -55,6 +58,7 @@ RAPIDAPI_X_HOST=your_rapidapi_host
 ```
 
 #### LLM Provider (Required)
+
 ```bash
 # Choose one
 OPENAI_API_KEY=your_openai_key
@@ -63,6 +67,7 @@ OPENAI_API_KEY=your_openai_key
 ```
 
 #### Optional Integration
+
 ```bash
 # Discord Bot (optional, for reporting)
 DISCORD_API_TOKEN=your_discord_token

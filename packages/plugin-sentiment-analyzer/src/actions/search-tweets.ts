@@ -261,7 +261,9 @@ async function searchTweetsByEmbedding(
 
       // Check if this memory is actually a tweet using the type column
       if (memory.type !== 'tweets') {
-        logger.debug(`[SearchTweets] Skipping memory ${memory.id} - not a tweet (type: ${memory.type})`);
+        logger.debug(
+          `[SearchTweets] Skipping memory ${memory.id} - not a tweet (type: ${memory.type})`
+        );
         continue;
       }
 

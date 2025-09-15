@@ -31,13 +31,11 @@ export class TopVoicesService extends Service {
   /**
    * Generate a top voices report for a given time period
    */
-  async generateTopVoicesReport(
-    hours: number,
-    limit: number = 50
-  ): Promise<TopVoicesReport> {
+  async generateTopVoicesReport(hours: number, limit: number = 50): Promise<TopVoicesReport> {
     const endTime = Date.now();
     const startTime = endTime - hours * 60 * 60 * 1000;
-    const label = hours === 24 ? 'Last 24 hours' : hours === 168 ? 'Last 7 days' : `Last ${hours} hours`;
+    const label =
+      hours === 24 ? 'Last 24 hours' : hours === 168 ? 'Last 7 days' : `Last ${hours} hours`;
 
     logger.info(`[TOP_VOICES] Generating top voices report for ${label}`);
 
@@ -49,7 +47,7 @@ export class TopVoicesService extends Service {
     try {
       // Get tweets from the time range
       const tweets = await this.persistenceService.getTweetsByTimeRange(startTime, endTime);
-      
+
       // Also get sentiment analysis data for average sentiment calculation
       const sentimentData = await this.persistenceService.getSentimentAnalysisByTimeRange(
         startTime,
@@ -59,20 +57,23 @@ export class TopVoicesService extends Service {
       logger.info(`[TOP_VOICES] Processing ${tweets.length} tweets for top voices`);
 
       // Aggregate by author
-      const authorMap = new Map<string, {
-        username: string;
-        name?: string;
-        mentionCount: number;
-        followerCount?: number;
-        platforms: Set<string>;
-        sentimentScores: number[];
-        tweetIds: string[];
-      }>();
+      const authorMap = new Map<
+        string,
+        {
+          username: string;
+          name?: string;
+          mentionCount: number;
+          followerCount?: number;
+          platforms: Set<string>;
+          sentimentScores: number[];
+          tweetIds: string[];
+        }
+      >();
 
       // Process tweets
       for (const tweet of tweets) {
         const key = tweet.author.username.toLowerCase();
-        
+
         if (!authorMap.has(key)) {
           authorMap.set(key, {
             username: tweet.author.username,
@@ -81,7 +82,7 @@ export class TopVoicesService extends Service {
             followerCount: tweet.author.followerCount,
             platforms: new Set(),
             sentimentScores: [],
-            tweetIds: []
+            tweetIds: [],
           });
         }
 
@@ -89,9 +90,12 @@ export class TopVoicesService extends Service {
         author.mentionCount++;
         author.platforms.add(tweet.platform);
         author.tweetIds.push(tweet.id);
-        
+
         // Update follower count if higher (in case of multiple tweets from same author)
-        if (tweet.author.followerCount && (!author.followerCount || tweet.author.followerCount > author.followerCount)) {
+        if (
+          tweet.author.followerCount &&
+          (!author.followerCount || tweet.author.followerCount > author.followerCount)
+        ) {
           author.followerCount = tweet.author.followerCount;
         }
       }
@@ -109,23 +113,34 @@ export class TopVoicesService extends Service {
 
       // Convert to array and calculate average sentiments
       const topVoices: TopVoice[] = Array.from(authorMap.values())
-        .map(author => {
-          const avgSentiment = author.sentimentScores.length > 0
-            ? author.sentimentScores.reduce((a, b) => a + b, 0) / author.sentimentScores.length
-            : undefined;
+        .map((author) => {
+          const avgSentiment =
+            author.sentimentScores.length > 0
+              ? author.sentimentScores.reduce((a, b) => a + b, 0) / author.sentimentScores.length
+              : undefined;
+
+          // Get recent tweet IDs for this author (up to 3 most recent)
+          const recentTweetIds = author.tweetIds.slice(-3);
+          const sampleTweetUrls = recentTweetIds.map(
+            (tweetId) => `https://twitter.com/${author.username}/status/${tweetId}`
+          );
 
           return {
             username: author.username,
             name: author.name,
             mentionCount: author.mentionCount,
             followerCount: author.followerCount,
-            averageSentiment: avgSentiment !== undefined ? {
-              score: avgSentiment,
-              confidence: 0.8, // Default confidence
-              magnitude: Math.abs(avgSentiment),
-              label: this.getSentimentLabel(avgSentiment)
-            } : undefined,
-            platforms: Array.from(author.platforms)
+            averageSentiment:
+              avgSentiment !== undefined
+                ? {
+                    score: avgSentiment,
+                    confidence: 0.8, // Default confidence
+                    magnitude: Math.abs(avgSentiment),
+                    label: this.getSentimentLabel(avgSentiment),
+                  }
+                : undefined,
+            platforms: Array.from(author.platforms),
+            sampleTweetUrls, // Add sample tweet URLs
           };
         })
         .sort((a, b) => b.mentionCount - a.mentionCount)
@@ -136,12 +151,12 @@ export class TopVoicesService extends Service {
         timeframe: {
           start: startTime,
           end: endTime,
-          label
+          label,
         },
         totalUniqueAuthors: authorMap.size,
         totalMentions: tweets.length,
         topVoices,
-        generatedAt: Date.now()
+        generatedAt: Date.now(),
       };
 
       logger.info(
@@ -186,30 +201,38 @@ export class TopVoicesService extends Service {
     }
 
     formatted += `**Top ${voices.length} Voices:**\n`;
-    
+
     for (let i = 0; i < voices.length; i++) {
       const voice = voices[i];
       const rank = i + 1;
       const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : `${rank}.`;
-      
+
       formatted += `${medal} **@${voice.username}**`;
-      
+
       if (voice.name) {
         formatted += ` (${voice.name})`;
       }
-      
+
       formatted += ` - ${voice.mentionCount} mention${voice.mentionCount !== 1 ? 's' : ''}`;
-      
+
       if (voice.followerCount) {
         formatted += ` • ${this.formatFollowerCount(voice.followerCount)} followers`;
       }
-      
+
       if (voice.averageSentiment) {
         const emoji = this.getSentimentEmoji(voice.averageSentiment.score);
         formatted += ` ${emoji}`;
       }
-      
+
       formatted += '\n';
+
+      // Add sample tweet URLs if available (show up to 2 recent tweets)
+      if ((voice as any).sampleTweetUrls && (voice as any).sampleTweetUrls.length > 0) {
+        const urlsToShow = (voice as any).sampleTweetUrls.slice(0, 2);
+        for (let j = 0; j < urlsToShow.length; j++) {
+          formatted += `   └ [Recent Tweet ${j + 1}](${urlsToShow[j]})\n`;
+        }
+      }
     }
 
     return formatted;
@@ -236,10 +259,10 @@ export class TopVoicesService extends Service {
       const rank = (i + 1).toString().padEnd(4);
       const username = voice.username.padEnd(20).substring(0, 20);
       const mentions = voice.mentionCount.toString().padEnd(8);
-      const followers = voice.followerCount 
+      const followers = voice.followerCount
         ? this.formatFollowerCount(voice.followerCount).padEnd(10)
         : 'N/A'.padEnd(10);
-      const sentiment = voice.averageSentiment 
+      const sentiment = voice.averageSentiment
         ? `${voice.averageSentiment.score >= 0 ? '+' : ''}${voice.averageSentiment.score.toFixed(2)}`
         : 'N/A';
 
@@ -261,12 +284,12 @@ export class TopVoicesService extends Service {
       timeframe: {
         start: startTime,
         end: endTime,
-        label
+        label,
       },
       totalUniqueAuthors: 0,
       totalMentions: 0,
       topVoices: [],
-      generatedAt: Date.now()
+      generatedAt: Date.now(),
     };
   }
 

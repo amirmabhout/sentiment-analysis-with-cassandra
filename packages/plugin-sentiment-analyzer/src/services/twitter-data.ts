@@ -4,10 +4,10 @@ import type { FetchStatistics } from './traffic-analyzer';
 
 /**
  * Unified Twitter Data Service that intelligently chooses between official and third-party APIs
- * 
+ *
  * This service provides legal compliance by preferring official Twitter API when available,
  * while falling back to RapidAPI for educational/research purposes when explicitly configured.
- * 
+ *
  * Environment Variable Priority:
  * 1. If TWITTER_BEARER_TOKEN is set -> Use Official Twitter API v2
  * 2. If RAPIDAPI_API_KEY is set -> Use RapidAPI (with legal warnings)
@@ -15,7 +15,8 @@ import type { FetchStatistics } from './traffic-analyzer';
  */
 export class TwitterDataService extends Service {
   static serviceType = 'twitter-data';
-  capabilityDescription = 'Unified Twitter data service supporting both official API and third-party services';
+  capabilityDescription =
+    'Unified Twitter data service supporting both official API and third-party services';
 
   private dataProvider: 'official' | 'rapidapi' | null = null;
   private watchTerms: string[] = ['ai16z', 'elizaos'];
@@ -35,6 +36,12 @@ export class TwitterDataService extends Service {
   private rapidApiAppName: string = '';
   private lastCursor: string | null = null;
 
+  // Cache refresh tracking
+  private lastCacheRefresh: number = 0;
+  private cacheRefreshInterval: number = 60 * 60 * 1000; // 1 hour
+  private tweetsProcessedSinceRefresh: number = 0;
+  private cacheRefreshThreshold: number = 500; // Refresh after 500 new tweets
+
   constructor(runtime: IAgentRuntime) {
     super(runtime);
     this.loadConfiguration();
@@ -43,6 +50,7 @@ export class TwitterDataService extends Service {
   static async start(runtime: IAgentRuntime): Promise<TwitterDataService> {
     logger.info('🚀 Starting Unified Twitter Data Service');
     const service = new TwitterDataService(runtime);
+    await service.loadProcessedTweetIdsFromDatabase();
     return service;
   }
 
@@ -54,43 +62,51 @@ export class TwitterDataService extends Service {
   private loadConfiguration(): void {
     // Check for official Twitter API credentials first
     const runtimeTwitterBearerToken = this.runtime.getSetting('TWITTER_BEARER_TOKEN') as string;
-    this.twitterBearerToken = 
-      (runtimeTwitterBearerToken && runtimeTwitterBearerToken.trim()) ? runtimeTwitterBearerToken : 
-      (process.env.TWITTER_BEARER_TOKEN || '');
-    
+    this.twitterBearerToken =
+      runtimeTwitterBearerToken && runtimeTwitterBearerToken.trim()
+        ? runtimeTwitterBearerToken
+        : process.env.TWITTER_BEARER_TOKEN || '';
+
     const runtimeTwitterApiKey = this.runtime.getSetting('TWITTER_API_KEY') as string;
-    this.twitterApiKey = 
-      (runtimeTwitterApiKey && runtimeTwitterApiKey.trim()) ? runtimeTwitterApiKey : 
-      (process.env.TWITTER_API_KEY || '');
-    
+    this.twitterApiKey =
+      runtimeTwitterApiKey && runtimeTwitterApiKey.trim()
+        ? runtimeTwitterApiKey
+        : process.env.TWITTER_API_KEY || '';
+
     const runtimeTwitterApiSecretKey = this.runtime.getSetting('TWITTER_API_SECRET_KEY') as string;
-    this.twitterApiSecretKey = 
-      (runtimeTwitterApiSecretKey && runtimeTwitterApiSecretKey.trim()) ? runtimeTwitterApiSecretKey : 
-      (process.env.TWITTER_API_SECRET_KEY || '');
+    this.twitterApiSecretKey =
+      runtimeTwitterApiSecretKey && runtimeTwitterApiSecretKey.trim()
+        ? runtimeTwitterApiSecretKey
+        : process.env.TWITTER_API_SECRET_KEY || '';
 
     // Check for RapidAPI credentials as fallback
     const runtimeRapidApiKey = this.runtime.getSetting('RAPIDAPI_API_KEY') as string;
     this.rapidApiKey =
-      (runtimeRapidApiKey && runtimeRapidApiKey.trim()) ? runtimeRapidApiKey : 
-      (process.env.RAPIDAPI_API_KEY || '');
+      runtimeRapidApiKey && runtimeRapidApiKey.trim()
+        ? runtimeRapidApiKey
+        : process.env.RAPIDAPI_API_KEY || '';
 
     const runtimeRapidApiHost = this.runtime.getSetting('RAPIDAPI_X_HOST') as string;
-    const rapidApiHost = 
-      (runtimeRapidApiHost && runtimeRapidApiHost.trim()) ? runtimeRapidApiHost : 
-      process.env.RAPIDAPI_X_HOST;
+    const rapidApiHost =
+      runtimeRapidApiHost && runtimeRapidApiHost.trim()
+        ? runtimeRapidApiHost
+        : process.env.RAPIDAPI_X_HOST;
     if (rapidApiHost) {
       this.rapidApiHost = rapidApiHost;
     }
 
     const runtimeRapidApiAppName = this.runtime.getSetting('RAPIDAPI_APP_NAME') as string;
     this.rapidApiAppName =
-      (runtimeRapidApiAppName && runtimeRapidApiAppName.trim()) ? runtimeRapidApiAppName :
-      (process.env.RAPIDAPI_APP_NAME || 'default-application_11000772');
+      runtimeRapidApiAppName && runtimeRapidApiAppName.trim()
+        ? runtimeRapidApiAppName
+        : process.env.RAPIDAPI_APP_NAME || 'default-application_11000772';
 
     // Determine which data provider to use
     if (this.twitterBearerToken || (this.twitterApiKey && this.twitterApiSecretKey)) {
       this.dataProvider = 'official';
-      logger.info('✅ Official Twitter API credentials found - using official API (recommended for compliance)');
+      logger.info(
+        '✅ Official Twitter API credentials found - using official API (recommended for compliance)'
+      );
       logger.info('🔒 This configuration complies with Twitter Terms of Service');
     } else if (this.rapidApiKey) {
       this.dataProvider = 'rapidapi';
@@ -136,10 +152,11 @@ export class TwitterDataService extends Service {
       `Twitter Data Service Config - Provider: ${this.dataProvider}, Watch terms: ${this.watchTerms.join(', ')}, Max tweets: ${this.maxTweetsPerCycle}`
     );
 
-    if (process.env.NODE_ENV === 'development') {
-      logger.info('Development mode: Starting with cleared processed tweet cache');
-      this.processedTweetIds.clear();
-    }
+    // Note: Removed automatic cache clearing in development mode to prevent duplicate fetching
+    // Cache will be populated from database on startup for proper deduplication
+    logger.debug(
+      'Tweet cache will be loaded from database on startup for persistent deduplication'
+    );
   }
 
   /**
@@ -158,6 +175,9 @@ export class TwitterDataService extends Service {
       return [];
     }
 
+    // Check if cache refresh is needed
+    await this.checkAndRefreshCacheIfNeeded();
+
     const fetchStartTime = Date.now();
     const cutoffTimestamp = this.calculateCutoffTimestamp(sinceTimestamp);
 
@@ -167,7 +187,7 @@ export class TwitterDataService extends Service {
 
     try {
       let allPosts: SocialMediaPost[] = [];
-      
+
       if (this.dataProvider === 'official') {
         allPosts = await this.fetchViaOfficialAPI(cutoffTimestamp);
       } else if (this.dataProvider === 'rapidapi') {
@@ -203,22 +223,28 @@ export class TwitterDataService extends Service {
         oldestTweetTime,
         newestTweetTime,
         processingTimeMs: Date.now() - fetchStartTime,
-        watchTermsFound: this.watchTerms.reduce((acc, term) => {
-          acc[term] = limitedPosts.filter(post => 
-            post.searchTerms?.includes(term) || post.searchContext === term
-          ).length;
-          return acc;
-        }, {} as Record<string, number>),
+        watchTermsFound: this.watchTerms.reduce(
+          (acc, term) => {
+            acc[term] = limitedPosts.filter(
+              (post) => post.searchTerms?.includes(term) || post.searchContext === term
+            ).length;
+            return acc;
+          },
+          {} as Record<string, number>
+        ),
         cursorUsed: this.dataProvider === 'rapidapi' && this.lastCursor !== null,
       };
 
       this.lastFetchTimestamp = Date.now();
 
+      // Track tweets processed for cache refresh
+      this.tweetsProcessedSinceRefresh += limitedPosts.length;
+
       logger.info(
         `Fetched ${limitedPosts.length} unique tweets via ${this.dataProvider} ` +
-        `(${totalFetched} total, ${duplicateCount} duplicates, ${(duplicateRatio * 100).toFixed(1)}% dup rate)`
+          `(${totalFetched} total, ${duplicateCount} duplicates, ${(duplicateRatio * 100).toFixed(1)}% dup rate)`
       );
-      
+
       return limitedPosts;
     } catch (error) {
       logger.error(`Error fetching tweets from ${this.dataProvider}:`, error);
@@ -232,20 +258,20 @@ export class TwitterDataService extends Service {
   private async fetchViaOfficialAPI(cutoffTimestamp: number): Promise<SocialMediaPost[]> {
     logger.info('📡 Using Official Twitter API v2 (compliant with ToS)');
     const allPosts: SocialMediaPost[] = [];
-    
+
     for (const term of this.watchTerms) {
       try {
         logger.info(`Searching official Twitter API for: ${term}`);
-        
+
         // Use Twitter API v2 recent search endpoint
         const query = encodeURIComponent(`${term} -is:retweet lang:en`);
         const maxResults = Math.min(this.maxTweetsPerCycle, 100); // API limit is 100
-        
+
         let url = `https://api.twitter.com/2/tweets/search/recent?query=${query}&max_results=${maxResults}`;
         url += '&tweet.fields=created_at,public_metrics,context_annotations,lang,referenced_tweets';
         url += '&user.fields=username,name,description,public_metrics,verified';
         url += '&expansions=author_id';
-        
+
         // Add time filter
         if (cutoffTimestamp > 0) {
           const startTime = new Date(cutoffTimestamp).toISOString();
@@ -263,27 +289,28 @@ export class TwitterDataService extends Service {
         }
 
         const response = await fetch(url, { headers });
-        
+
         if (!response.ok) {
           const errorText = await response.text();
-          logger.error(`Official Twitter API request failed: ${response.status} ${response.statusText} - ${errorText}`);
+          logger.error(
+            `Official Twitter API request failed: ${response.status} ${response.statusText} - ${errorText}`
+          );
           continue;
         }
 
         const data = await response.json();
         const posts = this.transformOfficialAPIResponse(data, term, cutoffTimestamp);
         allPosts.push(...posts);
-        
+
         logger.info(`Found ${posts.length} posts for term: ${term} via official API`);
-        
+
         // Rate limiting: Twitter API v2 allows 300 requests per 15min window
-        await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
-        
+        await new Promise((resolve) => setTimeout(resolve, 1000)); // 1 second delay
       } catch (error) {
         logger.error(`Error searching official API for ${term}:`, error);
       }
     }
-    
+
     return allPosts;
   }
 
@@ -293,22 +320,21 @@ export class TwitterDataService extends Service {
   private async fetchViaRapidAPI(cutoffTimestamp: number): Promise<SocialMediaPost[]> {
     logger.warn('📡 Using RapidAPI (third-party) - ⚠️  LEGAL RISK: May violate Twitter ToS');
     const allPosts: SocialMediaPost[] = [];
-    
+
     for (const term of this.watchTerms) {
       try {
         logger.info(`Searching RapidAPI for: ${term}`);
         const posts = await this.searchRapidAPIForTerm(term, cutoffTimestamp);
         allPosts.push(...posts);
         logger.info(`Found ${posts.length} posts for term: ${term} via RapidAPI`);
-        
+
         // Be more conservative with RapidAPI rate limiting
-        await new Promise(resolve => setTimeout(resolve, 3000)); // 3 second delay
-        
+        await new Promise((resolve) => setTimeout(resolve, 3000)); // 3 second delay
       } catch (error) {
         logger.error(`Error searching RapidAPI for ${term}:`, error);
       }
     }
-    
+
     return allPosts;
   }
 
@@ -321,19 +347,19 @@ export class TwitterDataService extends Service {
     cutoffTimestamp: number
   ): SocialMediaPost[] {
     const posts: SocialMediaPost[] = [];
-    
+
     try {
       const tweets = apiResponse.data || [];
       const users = apiResponse.includes?.users || [];
-      
+
       // Create user lookup map
       const userMap = new Map();
       for (const user of users) {
         userMap.set(user.id, user);
       }
-      
+
       logger.info(`Processing ${tweets.length} tweets from official API for term: ${searchTerm}`);
-      
+
       for (const tweet of tweets) {
         try {
           const user = userMap.get(tweet.author_id);
@@ -341,19 +367,19 @@ export class TwitterDataService extends Service {
             logger.debug(`No user data found for tweet: ${tweet.id}`);
             continue;
           }
-          
+
           const timestamp = new Date(tweet.created_at).getTime();
-          
+
           // Skip if too old
           if (timestamp < cutoffTimestamp) {
             continue;
           }
-          
+
           // Skip if already processed
           if (this.processedTweetIds.has(tweet.id)) {
             continue;
           }
-          
+
           const post: SocialMediaPost = {
             id: tweet.id,
             platform: 'twitter',
@@ -371,8 +397,10 @@ export class TwitterDataService extends Service {
               text: tweet.text,
               url: `https://twitter.com/${user.username}/status/${tweet.id}`,
               hasMedia: false, // Would need to check attachments
-              isRetweet: tweet.referenced_tweets?.some((ref: any) => ref.type === 'retweeted') || false,
-              isReply: tweet.referenced_tweets?.some((ref: any) => ref.type === 'replied_to') || false,
+              isRetweet:
+                tweet.referenced_tweets?.some((ref: any) => ref.type === 'retweeted') || false,
+              isReply:
+                tweet.referenced_tweets?.some((ref: any) => ref.type === 'replied_to') || false,
             },
             metrics: {
               likes: tweet.public_metrics?.like_count || 0,
@@ -386,19 +414,17 @@ export class TwitterDataService extends Service {
             searchTerms: [searchTerm],
             attributionSource: 'search' as const,
           };
-          
+
           posts.push(post);
           this.processedTweetIds.add(tweet.id);
-          
         } catch (error) {
           logger.warn(`Error processing tweet ${tweet.id}:`, error);
         }
       }
-      
     } catch (error) {
       logger.error(`Error transforming official API response for ${searchTerm}:`, error);
     }
-    
+
     return posts;
   }
 
@@ -446,7 +472,7 @@ export class TwitterDataService extends Service {
     logger.debug(
       `RapidAPI response received - hasCursor: ${!!data.cursor}, hasResult: ${!!data.result}, hasTimeline: ${!!data.result?.timeline}`
     );
-    
+
     if (data.cursor?.bottom) {
       this.lastCursor = data.cursor.bottom;
       logger.debug(`Updated cursor: ${this.lastCursor}`);
@@ -465,7 +491,7 @@ export class TwitterDataService extends Service {
     cutoffTimestamp: number
   ): SocialMediaPost[] {
     const posts: SocialMediaPost[] = [];
-    
+
     try {
       logger.debug(`Processing Twitter API response for term: ${searchTerm}`);
 
@@ -780,25 +806,27 @@ export class TwitterDataService extends Service {
   private calculateCutoffTimestamp(sinceTimestamp?: number): number {
     const isDevelopment = process.env.NODE_ENV === 'development';
     const isFirstRun = this.isFirstRun();
-    
+
     // For RapidAPI, we don't need time filtering since it always returns latest tweets
     // and we rely on processedTweetIds for deduplication
     if (this.dataProvider === 'rapidapi') {
-      logger.debug('[TwitterData] RapidAPI provider: Using minimal cutoff timestamp (relying on deduplication)');
+      logger.debug(
+        '[TwitterData] RapidAPI provider: Using minimal cutoff timestamp (relying on deduplication)'
+      );
       return 0; // Effectively disable time-based filtering for RapidAPI
     }
-    
+
     // For Official API, use proper time-based filtering since it supports it
     if (isDevelopment) {
       const devTimeWindow = parseInt(process.env.SENTIMENT_DEV_TIME_WINDOW || '21600000', 10);
       return Date.now() - devTimeWindow;
     }
-    
+
     if (isFirstRun) {
       const firstRunHours = parseInt(process.env.SENTIMENT_FIRST_RUN_HOURS || '6', 10);
-      return Date.now() - (firstRunHours * 60 * 60 * 1000);
+      return Date.now() - firstRunHours * 60 * 60 * 1000;
     }
-    
+
     return sinceTimestamp || this.lastFetchTimestamp || Date.now() - 10 * 60 * 1000;
   }
 
@@ -812,10 +840,11 @@ export class TwitterDataService extends Service {
       const existingPost = postMap.get(post.id);
       if (existingPost) {
         // Merge search terms
-        const existingTerms = existingPost.searchTerms || [existingPost.searchContext].filter(Boolean);
+        const existingTerms =
+          existingPost.searchTerms || [existingPost.searchContext].filter(Boolean);
         const newTerms = post.searchTerms || [post.searchContext].filter(Boolean);
         const mergedTerms = [...new Set([...existingTerms, ...newTerms])];
-        
+
         postMap.set(post.id, {
           ...existingPost,
           searchTerms: mergedTerms,
@@ -870,6 +899,104 @@ export class TwitterDataService extends Service {
   updateWatchTerms(terms: string[]): void {
     this.watchTerms = terms;
     logger.info(`Updated Twitter Data Service watch terms: ${terms.join(', ')}`);
+  }
+
+  /**
+   * Load processed tweet IDs from database into memory cache on startup
+   */
+  private async loadProcessedTweetIdsFromDatabase(): Promise<void> {
+    const startTime = Date.now();
+
+    try {
+      logger.info('🔄 Loading processed tweet IDs from database into cache...');
+
+      // Get recent tweets from database to populate the cache
+      const recentTweets = await this.runtime.getMemories({
+        tableName: 'tweets',
+        roomId: this.runtime.agentId,
+        count: 1000, // Load last 1000 tweets for comprehensive deduplication
+      });
+
+      let loadedCount = 0;
+      for (const memory of recentTweets) {
+        try {
+          const metadata =
+            typeof memory.metadata === 'string'
+              ? JSON.parse(memory.metadata)
+              : memory.metadata || {};
+
+          if (metadata.type === 'tweet' && metadata.tweetId) {
+            this.processedTweetIds.add(metadata.tweetId);
+            loadedCount++;
+          }
+        } catch (error) {
+          // Skip invalid metadata entries
+          logger.debug('Skipped tweet memory with invalid metadata:', memory.id);
+        }
+      }
+
+      const loadTime = Date.now() - startTime;
+      logger.info(
+        `✅ Loaded ${loadedCount} processed tweet IDs from database in ${loadTime}ms` +
+          ` (${this.processedTweetIds.size} total in cache)`
+      );
+
+      // Update last fetch timestamp to latest tweet if available
+      if (recentTweets.length > 0) {
+        const latestTimestamp = Math.max(...recentTweets.map((m) => m.createdAt || 0));
+        if (latestTimestamp > this.lastFetchTimestamp) {
+          this.lastFetchTimestamp = latestTimestamp;
+          logger.debug(
+            `Updated last fetch timestamp to: ${new Date(latestTimestamp).toISOString()}`
+          );
+        }
+      }
+
+      // Reset cache refresh tracking
+      this.lastCacheRefresh = Date.now();
+      this.tweetsProcessedSinceRefresh = 0;
+    } catch (error) {
+      logger.warn('Failed to load processed tweet IDs from database:', error);
+      logger.info(
+        'Continuing with empty cache - will rely on database deduplication during storage'
+      );
+    }
+  }
+
+  /**
+   * Check if cache refresh is needed and refresh if so
+   */
+  private async checkAndRefreshCacheIfNeeded(): Promise<void> {
+    const now = Date.now();
+    const timeSinceRefresh = now - this.lastCacheRefresh;
+    const needsTimeRefresh = timeSinceRefresh >= this.cacheRefreshInterval;
+    const needsCountRefresh = this.tweetsProcessedSinceRefresh >= this.cacheRefreshThreshold;
+
+    if (needsTimeRefresh || needsCountRefresh) {
+      logger.info(
+        `🔄 Cache refresh needed: ${needsTimeRefresh ? `${Math.floor(timeSinceRefresh / (60 * 1000))}min since last refresh` : ''} ` +
+          `${needsCountRefresh ? `${this.tweetsProcessedSinceRefresh} tweets processed` : ''}`
+      );
+
+      try {
+        await this.refreshProcessedTweetIdsCache();
+      } catch (error) {
+        logger.warn('Failed to refresh cache, continuing with current cache:', error);
+      }
+    }
+  }
+
+  /**
+   * Refresh the processed tweet IDs cache from database
+   */
+  async refreshProcessedTweetIdsCache(): Promise<void> {
+    logger.info('🔄 Refreshing processed tweet IDs cache from database...');
+    this.processedTweetIds.clear();
+    await this.loadProcessedTweetIdsFromDatabase();
+
+    // Reset tracking after refresh
+    this.lastCacheRefresh = Date.now();
+    this.tweetsProcessedSinceRefresh = 0;
   }
 
   /**

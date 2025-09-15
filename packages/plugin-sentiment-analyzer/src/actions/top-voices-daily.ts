@@ -33,21 +33,13 @@ export const topVoicesDailyAction: Action = {
       'top accounts',
       'leaderboard',
       'who is talking',
-      'who mentioned'
+      'who mentioned',
     ];
 
     const hasTopVoicesKeyword = topVoicesKeywords.some((keyword) => text.includes(keyword));
 
     // Check for daily/24h keywords
-    const dailyKeywords = [
-      'daily',
-      'today',
-      '24 hour',
-      '24h',
-      'last day',
-      'past day',
-      'yesterday'
-    ];
+    const dailyKeywords = ['daily', 'today', '24 hour', '24h', 'last day', 'past day', 'yesterday'];
 
     const hasDailyKeyword = dailyKeywords.some((keyword) => text.includes(keyword));
 
@@ -109,7 +101,7 @@ export const topVoicesDailyAction: Action = {
 
       // Format the report based on the context
       let formattedReport: string;
-      
+
       // Use Discord formatting if available, otherwise use table format
       if (callback) {
         formattedReport = topVoicesService.formatReportForDiscord(report, limit);

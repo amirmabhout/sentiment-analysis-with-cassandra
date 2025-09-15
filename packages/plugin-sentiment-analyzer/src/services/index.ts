@@ -9,3 +9,4 @@ export * from './dynamic-scheduler.ts';
 export * from './sentiment-alerts.ts';
 export * from './discord-reporting.ts';
 export * from './top-voices.ts';
+export * from './report-generation.ts';

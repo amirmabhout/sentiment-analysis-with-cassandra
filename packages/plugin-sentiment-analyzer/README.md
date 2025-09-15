@@ -33,7 +33,9 @@ Configure the plugin using environment variables:
 ### Required Configuration
 
 #### Official Twitter/X API (Recommended for Production)
+
 For compliance with Twitter/X Terms of Service:
+
 ```bash
 # Official Twitter API v2
 TWITTER_BEARER_TOKEN=your_official_twitter_token
@@ -42,6 +44,7 @@ TWITTER_API_SECRET_KEY=your_twitter_api_secret_key
 ```
 
 #### Alternative: Third-Party Services (Use at Your Own Risk)
+
 ```bash
 # RapidAPI (Third-party service - may violate Twitter ToS)
 RAPIDAPI_API_KEY=your_rapidapi_key
@@ -51,6 +54,7 @@ RAPIDAPI_X_HOST=your_rapidapi_host
 **⚠️ Warning**: Using third-party Twitter data services may violate Twitter's Terms of Service.
 
 #### LLM Provider (Required)
+
 ```bash
 # Choose one
 OPENAI_API_KEY=your_openai_key
@@ -61,6 +65,7 @@ GOOGLE_GENAI_API_KEY=your_google_key
 ```
 
 #### Optional Integration
+
 ```bash
 # Discord Bot Token (for reporting)
 DISCORD_API_TOKEN=your_discord_bot_token

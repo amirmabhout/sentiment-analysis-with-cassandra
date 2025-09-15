@@ -10,6 +10,7 @@ import {
   parseKeyValueXml,
 } from '@elizaos/core';
 import type { SentimentReport } from '../types.ts';
+import type { ReportGenerationService } from '../services/report-generation.ts';
 
 /**
  * Action for generating and posting sentiment reports to Discord
@@ -67,10 +68,11 @@ export const sentimentReportAction: Action = {
     try {
       // Get required services
       const sentimentService = runtime.getService('sentiment-analysis');
-      const aggregatorService = runtime.getService('sentiment-aggregator');
-      const topVoicesService = runtime.getService('top-voices');
+      const reportGenerationService = runtime.getService(
+        'report-generation'
+      ) as ReportGenerationService;
 
-      if (!sentimentService || !aggregatorService) {
+      if (!sentimentService || !reportGenerationService) {
         const errorMsg = 'Sentiment analysis services are not available at the moment.';
         if (callback) {
           await callback({
@@ -93,53 +95,32 @@ export const sentimentReportAction: Action = {
 
       logger.info(`[SentimentReport] Generating ${reportType} report for ${timeframe.label}`);
 
-      // Generate the report
+      // Generate the report using unified service
       const watchTerms = (sentimentService as any).getWatchTerms() as string[];
-      const report = await (aggregatorService as any).generateReport(
+      const report = await reportGenerationService.generateReport(
         watchTerms,
         timeframe.hours,
         reportType
       );
 
-      // Add top voices to the report if service is available
-      if (topVoicesService) {
-        try {
-          const endTime = Date.now();
-          const startTime = endTime - timeframe.hours * 60 * 60 * 1000;
-          const topVoices = await (topVoicesService as any).getTopVoicesForReport(
-            startTime,
-            endTime,
-            50 // Get top 50 for reports
-          );
-          if (topVoices && topVoices.length > 0) {
-            report.topVoices = topVoices;
-          }
-        } catch (error) {
-          logger.warn('[SentimentReport] Failed to add top voices to report:', error);
-        }
-      }
+      // Get top sentiment tweets for the same timeframe
+      const topTweets = await reportGenerationService.getTopSentimentTweets(timeframe.hours);
 
-      // Format the report for Discord
-      const formattedReport = formatReportForDiscord(report);
+      // Format the report with top tweets included
+      const formattedReport = reportGenerationService.formatReportWithTopTweets(report, topTweets);
 
-      // Send the report
+      // Send the report (alerts are already included in formattedReport)
       if (callback) {
         await callback({
           text: formattedReport,
           action: 'SENTIMENT_REPORT',
         });
-
-        // If there are alerts, send them separately
-        if (report.alerts.length > 0) {
-          const alertsSummary = formatAlertsForDiscord(report.alerts);
-          await callback({
-            text: `🚨 **Alerts Detected:**\n${alertsSummary}`,
-            action: 'SENTIMENT_ALERTS',
-          });
-        }
       }
 
-      logger.info(`[SentimentReport] Successfully generated and sent sentiment report`);
+      logger.info(
+        `[SentimentReport] Successfully generated and sent sentiment report with ` +
+          `${topTweets.positiveTweets.length} positive and ${topTweets.negativeTweets.length} negative top tweets`
+      );
 
       return {
         success: true,
@@ -261,177 +242,4 @@ function extractReportType(text: string): 'summary' | 'detailed' | 'alert' {
   return 'summary';
 }
 
-/**
- * Format sentiment report for Discord posting
- */
-function formatReportForDiscord(report: SentimentReport): string {
-  const emoji = getSentimentEmoji(report.overallMetrics.averageSentiment.score);
-  const trendEmoji = getTrendEmoji(report.overallMetrics.sentimentChange);
-
-  let formatted = `📊 **Sentiment Analysis Report - ${report.timeframe.label}**\n\n`;
-
-  // Overall metrics
-  formatted += `**Overall Metrics:**\n`;
-  formatted += `• Total posts analyzed: **${report.overallMetrics.totalVolume}**\n`;
-  formatted += `• Average sentiment: **${report.overallMetrics.averageSentiment.score.toFixed(2)}** ${emoji}\n`;
-
-  if (report.overallMetrics.volumeChange !== 0) {
-    const volumeChangeStr = report.overallMetrics.volumeChange > 0 ? '+' : '';
-    formatted += `• Volume change: **${volumeChangeStr}${report.overallMetrics.volumeChange.toFixed(1)}%**\n`;
-  }
-
-  if (report.overallMetrics.sentimentChange !== 0) {
-    const sentimentChangeStr = report.overallMetrics.sentimentChange > 0 ? '+' : '';
-    formatted += `• Sentiment change: **${sentimentChangeStr}${(report.overallMetrics.sentimentChange * 100).toFixed(1)}%** ${trendEmoji}\n`;
-  }
-
-  formatted += '\n';
-
-  // Watch term breakdowns (top 3)
-  if (report.breakdowns.length > 0) {
-    formatted += `**Watch Term Analysis:**\n`;
-    for (const breakdown of report.breakdowns.slice(0, 3)) {
-      const termEmoji = getSentimentEmoji(breakdown.overallSentiment.score);
-      formatted +=
-        `• **${breakdown.watchTerm}**: ${breakdown.totalPosts} posts, ` +
-        `sentiment ${breakdown.overallSentiment.score.toFixed(2)} ${termEmoji}\n`;
-    }
-    formatted += '\n';
-  }
-
-  // Top narratives
-  if (report.narratives.length > 0) {
-    formatted += `**Key Narratives:**\n`;
-    for (let i = 0; i < Math.min(3, report.narratives.length); i++) {
-      const narrative = report.narratives[i];
-      const narrativeEmoji = getSentimentEmoji(narrative.sentiment.score);
-      formatted += `${i + 1}. **${narrative.theme}** (${narrative.posts} posts) ${narrativeEmoji}\n`;
-      if (narrative.keyPhrases.length > 0) {
-        formatted += `   Key phrases: *${narrative.keyPhrases.slice(0, 3).join(', ')}*\n`;
-      }
-    }
-    formatted += '\n';
-  }
-
-  // Top entities (if available)
-  const topEntities = report.breakdowns.flatMap((b) => b.topEntities).slice(0, 3);
-  if (topEntities.length > 0) {
-    formatted += `**Top Mentioned Entities:**\n`;
-    for (const entityData of topEntities) {
-      const entityEmoji = getSentimentEmoji(entityData.avgSentiment.score);
-      formatted += `• **${entityData.entity.text}** (${entityData.mentions} mentions) ${entityEmoji}\n`;
-    }
-    formatted += '\n';
-  }
-
-  // Top voices (if available)
-  if (report.topVoices && report.topVoices.length > 0) {
-    formatted += `**Top Voices:**\n`;
-    const voicesToShow = report.topVoices.slice(0, 5); // Show top 5 in main report
-    for (let i = 0; i < voicesToShow.length; i++) {
-      const voice = report.topVoices[i];
-      const rank = i + 1;
-      const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : `${rank}.`;
-      formatted += `${medal} **@${voice.username}** - ${voice.mentionCount} mentions`;
-      if (voice.followerCount) {
-        formatted += ` • ${formatFollowerCount(voice.followerCount)} followers`;
-      }
-      if (voice.averageSentiment) {
-        const voiceEmoji = getSentimentEmoji(voice.averageSentiment.score);
-        formatted += ` ${voiceEmoji}`;
-      }
-      formatted += '\n';
-    }
-    formatted += '\n';
-  }
-
-  // Summary insight
-  const sentimentLabel = getSentimentLabel(report.overallMetrics.averageSentiment.score);
-  formatted += `**Summary:** ${sentimentLabel} sentiment across ${report.overallMetrics.totalVolume} posts. `;
-
-  if (report.narratives.length > 0) {
-    formatted += `Primary discussion themes include ${report.narratives
-      .slice(0, 2)
-      .map((n) => n.theme.toLowerCase())
-      .join(' and ')}.`;
-  }
-
-  return formatted;
-}
-
-/**
- * Format alerts for Discord
- */
-function formatAlertsForDiscord(alerts: any[]): string {
-  let formatted = '';
-
-  const sortedAlerts = alerts.sort((a, b) => {
-    const severityOrder = { high: 3, medium: 2, low: 1 };
-    return (
-      (severityOrder[b.severity as keyof typeof severityOrder] || 0) -
-      (severityOrder[a.severity as keyof typeof severityOrder] || 0)
-    );
-  });
-
-  for (const alert of sortedAlerts) {
-    const alertEmoji = getAlertEmoji(alert.type, alert.severity);
-    formatted += `${alertEmoji} **${alert.severity.toUpperCase()}**: ${alert.message}\n`;
-  }
-
-  return formatted;
-}
-
-/**
- * Get emoji for sentiment score
- */
-function getSentimentEmoji(score: number): string {
-  if (score > 0.5) return '🟢';
-  if (score > 0.1) return '🔵';
-  if (score > -0.1) return '⚪';
-  if (score > -0.5) return '🟡';
-  return '🔴';
-}
-
-/**
- * Get emoji for trend direction
- */
-function getTrendEmoji(change: number): string {
-  if (Math.abs(change) < 0.05) return '➡️';
-  return change > 0 ? '📈' : '📉';
-}
-
-/**
- * Get alert emoji based on type and severity
- */
-function getAlertEmoji(type: string, severity: string): string {
-  if (severity === 'high') {
-    return type.includes('negative') ? '🚨' : '⚡';
-  }
-  if (severity === 'medium') {
-    return '⚠️';
-  }
-  return 'ℹ️';
-}
-
-/**
- * Get human-readable sentiment label
- */
-function getSentimentLabel(score: number): string {
-  if (score > 0.5) return 'Very positive';
-  if (score > 0.2) return 'Positive';
-  if (score > -0.2) return 'Neutral';
-  if (score > -0.5) return 'Negative';
-  return 'Very negative';
-}
-
-/**
- * Format follower count for display
- */
-function formatFollowerCount(count: number): string {
-  if (count >= 1000000) {
-    return `${(count / 1000000).toFixed(1)}M`;
-  } else if (count >= 1000) {
-    return `${(count / 1000).toFixed(1)}K`;
-  }
-  return count.toString();
-}
+// All formatting logic is now handled by the unified ReportGenerationService

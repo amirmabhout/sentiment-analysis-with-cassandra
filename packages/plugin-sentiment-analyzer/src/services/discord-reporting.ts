@@ -1,5 +1,6 @@
 import { Service, type IAgentRuntime, logger } from '@elizaos/core';
 import type { SentimentReport } from '../types.ts';
+import type { ReportGenerationService } from './report-generation.ts';
 
 /**
  * Discord reporting service that extends Discord functionality for sentiment reporting
@@ -53,42 +54,6 @@ export class DiscordReportingService extends Service {
   }
 
   /**
-   * Send a sentiment report to all configured Discord channels
-   */
-  async sendSentimentReport(report: SentimentReport): Promise<boolean> {
-    if (this.channelIds.length === 0) {
-      logger.warn('[DiscordReporting] No channels configured');
-      return false;
-    }
-
-    const formattedReport = this.formatReportForDiscord(report);
-    let successCount = 0;
-
-    for (const channelId of this.channelIds) {
-      try {
-        await this.runtime.sendMessageToTarget(
-          {
-            source: 'discord',
-            channelId: channelId,
-          },
-          {
-            text: formattedReport,
-          }
-        );
-        successCount++;
-        logger.info(`[DiscordReporting] Sentiment report sent to channel ${channelId}`);
-      } catch (error) {
-        logger.error(`[DiscordReporting] Failed to send report to channel ${channelId}:`, error);
-      }
-    }
-
-    logger.info(
-      `[DiscordReporting] Report sent to ${successCount}/${this.channelIds.length} channels`
-    );
-    return successCount > 0;
-  }
-
-  /**
    * Send a detailed sentiment report with top tweets to all configured Discord channels
    */
   async sendDetailedSentimentReport(report: SentimentReport, topTweets?: any): Promise<boolean> {
@@ -97,7 +62,22 @@ export class DiscordReportingService extends Service {
       return false;
     }
 
-    const formattedReport = this.formatDetailedReportForDiscord(report, topTweets);
+    // Use unified formatting from ReportGenerationService
+    const reportGenerationService = this.runtime.getService(
+      'report-generation'
+    ) as ReportGenerationService;
+    
+    let formattedReport: string;
+    if (reportGenerationService && topTweets) {
+      // Use new enhanced formatting that includes top tweets
+      formattedReport = reportGenerationService.formatReportWithTopTweets(report, topTweets);
+    } else if (reportGenerationService) {
+      // Standard formatting without top tweets
+      formattedReport = reportGenerationService.formatReportForDiscord(report);
+    } else {
+      // Legacy fallback
+      formattedReport = this.formatDetailedReportForDiscord(report, topTweets);
+    }
     let successCount = 0;
 
     for (const channelId of this.channelIds) {
@@ -128,9 +108,10 @@ export class DiscordReportingService extends Service {
   }
 
   /**
-   * Format sentiment report for Discord posting (regular report)
+   * Format detailed sentiment report with top tweets for Discord
+   * @deprecated Legacy fallback - use ReportGenerationService.formatReportForDiscord() instead
    */
-  private formatReportForDiscord(report: SentimentReport): string {
+  private formatDetailedReportForDiscord(report: SentimentReport, topTweets?: any): string {
     const emoji = this.getSentimentEmoji(report.overallMetrics.averageSentiment.score);
     const trendEmoji = this.getTrendEmoji(report.overallMetrics.sentimentChange);
 
@@ -165,40 +146,30 @@ export class DiscordReportingService extends Service {
       formatted += '\n';
     }
 
-    // Alerts if any
-    if (report.alerts.length > 0) {
-      formatted += `🚨 **Active Alerts:**\n`;
-      const sortedAlerts = report.alerts
-        .sort((a, b) => {
-          const severityOrder = { high: 3, medium: 2, low: 1 };
-          return (
-            (severityOrder[b.severity as keyof typeof severityOrder] || 0) -
-            (severityOrder[a.severity as keyof typeof severityOrder] || 0)
-          );
-        })
-        .slice(0, 3);
+    // Category-specific sections
+    if (report.categoryMetrics) {
+      // Trading & Speculation Section
+      formatted += `📈 **=== TRADING & SPECULATION ===**\n`;
+      formatted += this.formatCategorySection(report.categoryMetrics.trading, 'trading');
+      formatted += '\n';
 
-      for (const alert of sortedAlerts) {
+      // Technology & Community Section
+      formatted += `🛠️ **=== TECHNOLOGY & COMMUNITY ===**\n`;
+      formatted += this.formatCategorySection(report.categoryMetrics.technology, 'technology');
+      formatted += '\n';
+    }
+
+    // Alerts if any
+    if (report.alerts && report.alerts.length > 0) {
+      formatted += `\n**🚨 Active Alerts:**\n`;
+      for (const alert of report.alerts.slice(0, 3)) {
         const alertEmoji = this.getAlertEmoji(alert.type, alert.severity);
         formatted += `${alertEmoji} **${alert.severity.toUpperCase()}**: ${alert.message}\n`;
       }
       formatted += '\n';
     }
 
-    // Summary insight
-    const sentimentLabel = this.getSentimentLabel(report.overallMetrics.averageSentiment.score);
-    formatted += `**Summary:** ${sentimentLabel} sentiment across ${report.overallMetrics.totalVolume} posts.`;
-
-    return formatted;
-  }
-
-  /**
-   * Format detailed sentiment report with top tweets for Discord
-   */
-  private formatDetailedReportForDiscord(report: SentimentReport, topTweets?: any): string {
-    let formatted = this.formatReportForDiscord(report);
-
-    // Add top tweets section if provided
+    // Add top tweets section if provided (legacy fallback)
     if (
       topTweets &&
       (topTweets.positiveTweets?.length > 0 || topTweets.negativeTweets?.length > 0)
@@ -226,6 +197,10 @@ export class DiscordReportingService extends Service {
       }
     }
 
+    // Summary insight
+    const sentimentLabel = this.getSentimentLabel(report.overallMetrics.averageSentiment.score);
+    formatted += `\n**Summary:** ${sentimentLabel} sentiment across ${report.overallMetrics.totalVolume} posts.`;
+
     return formatted;
   }
 
@@ -239,11 +214,14 @@ export class DiscordReportingService extends Service {
     const sentimentScore = sentiment.sentiment.score > 0 ? '+' : '';
     const importance = (rankedTweet.importanceScore * 100).toFixed(0);
     const content = this.truncateText(tweet.content.text, 120);
+    const tweetUrl =
+      tweet.content.url || `https://twitter.com/${tweet.author.username}/status/${tweet.id}`;
 
     return (
       `**${index}.** ${author} (${followers})\n` +
       `   Sentiment: ${sentimentScore}${sentiment.sentiment.score.toFixed(2)} | Importance: ${importance}%\n` +
-      `   "${content}"\n\n`
+      `   "${content}"\n` +
+      `   [View Tweet](${tweetUrl})\n\n`
     );
   }
 
@@ -293,6 +271,97 @@ export class DiscordReportingService extends Service {
   private truncateText(text: string, maxLength: number): string {
     if (text.length <= maxLength) return text;
     return text.substring(0, maxLength - 3) + '...';
+  }
+
+  /**
+   * Format category section for Discord
+   */
+  private formatCategorySection(metrics: any, category: string): string {
+    if (!metrics || metrics.totalVolume === 0) {
+      return `*No ${category === 'trading' ? 'trading/speculation' : 'technology/community'} posts in this period*\n`;
+    }
+
+    const emoji = this.getSentimentEmoji(metrics.averageSentiment.score);
+    let section = '';
+
+    // Basic metrics
+    section += `• Total posts: **${metrics.totalVolume}**\n`;
+    section += `• Average sentiment: **${metrics.averageSentiment.score.toFixed(2)}** ${emoji}\n`;
+
+    if (metrics.volumeChange !== 0) {
+      const changeStr = metrics.volumeChange > 0 ? '+' : '';
+      section += `• Volume change: **${changeStr}${metrics.volumeChange.toFixed(1)}%**\n`;
+    }
+
+    if (metrics.sentimentChange !== 0) {
+      const changeStr = metrics.sentimentChange > 0 ? '+' : '';
+      section += `• Sentiment change: **${changeStr}${(metrics.sentimentChange * 100).toFixed(1)}%**\n`;
+    }
+
+    // Dominant indicators
+    if (metrics.dominantIndicators && metrics.dominantIndicators.length > 0) {
+      section += `• Key themes: *${metrics.dominantIndicators.join(', ')}*\n`;
+    }
+
+    section += '\n';
+
+    // Top positive posts
+    if (metrics.topPositivePosts && metrics.topPositivePosts.length > 0) {
+      section += `**🟢 Top Positive ${category === 'trading' ? 'Trading' : 'Technology'} Tweets:**\n`;
+      for (let i = 0; i < Math.min(3, metrics.topPositivePosts.length); i++) {
+        const item = metrics.topPositivePosts[i];
+        const tweet = item.post;
+        const sentiment = item.sentiment;
+        const tweetUrl =
+          tweet.content.url || `https://twitter.com/${tweet.author.username}/status/${tweet.id}`;
+
+        section += `${i + 1}. **@${tweet.author.username}**`;
+        if (tweet.author.followerCount) {
+          section += ` (${this.formatFollowerCountSimple(tweet.author.followerCount)} followers)`;
+        }
+        section += `\n`;
+        section += `   Sentiment: **${sentiment.sentiment.score > 0 ? '+' : ''}${sentiment.sentiment.score.toFixed(2)}** | `;
+        section += `Importance: **${(item.importanceScore * 100).toFixed(0)}%**\n`;
+        section += `   *"${tweet.content.text.substring(0, 150)}${tweet.content.text.length > 150 ? '...' : ''}"*\n`;
+        section += `   [View Tweet](${tweetUrl})\n\n`;
+      }
+    }
+
+    // Top negative posts
+    if (metrics.topNegativePosts && metrics.topNegativePosts.length > 0) {
+      section += `**🔴 Top Negative ${category === 'trading' ? 'Trading' : 'Technology'} Tweets:**\n`;
+      for (let i = 0; i < Math.min(3, metrics.topNegativePosts.length); i++) {
+        const item = metrics.topNegativePosts[i];
+        const tweet = item.post;
+        const sentiment = item.sentiment;
+        const tweetUrl =
+          tweet.content.url || `https://twitter.com/${tweet.author.username}/status/${tweet.id}`;
+
+        section += `${i + 1}. **@${tweet.author.username}**`;
+        if (tweet.author.followerCount) {
+          section += ` (${this.formatFollowerCountSimple(tweet.author.followerCount)} followers)`;
+        }
+        section += `\n`;
+        section += `   Sentiment: **${sentiment.sentiment.score.toFixed(2)}** | `;
+        section += `Importance: **${(item.importanceScore * 100).toFixed(0)}%**\n`;
+        section += `   *"${tweet.content.text.substring(0, 150)}${tweet.content.text.length > 150 ? '...' : ''}"*\n`;
+        section += `   [View Tweet](${tweetUrl})\n\n`;
+      }
+    }
+
+    return section;
+  }
+
+  /**
+   * Format follower count for display (simplified)
+   */
+  private formatFollowerCountSimple(count: number): string {
+    if (count >= 1000000) {
+      return `${(count / 1000000).toFixed(1)}M`;
+    } else if (count >= 1000) {
+      return `${(count / 1000).toFixed(1)}K`;
+    }
+    return count.toString();
   }
 
   /**

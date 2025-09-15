@@ -6,6 +6,9 @@ import type {
   ExtractedEntity,
   ExtractedTopic,
   SentimentScore,
+  CategoryMetrics,
+  ContentCategory,
+  SocialMediaPost,
 } from '../types.ts';
 import type { SentimentPersistenceService } from './persistence.ts';
 
@@ -275,6 +278,14 @@ export class SentimentAggregatorService extends Service {
     // Generate narratives
     const narratives = this.generateNarratives(breakdowns);
 
+    // Generate category-specific metrics
+    const categoryMetrics = await this.generateCategoryMetrics(
+      startTime,
+      endTime,
+      previousStart,
+      previousEnd
+    );
+
     const report: SentimentReport = {
       id: `sentiment-report-${Date.now()}` as any,
       generatedAt: Date.now(),
@@ -291,6 +302,7 @@ export class SentimentAggregatorService extends Service {
         volumeChange,
         sentimentChange,
       },
+      categoryMetrics,
       breakdowns,
       alerts,
       narratives,
@@ -307,6 +319,248 @@ export class SentimentAggregatorService extends Service {
     }
 
     return report;
+  }
+
+  /**
+   * Generate category-specific metrics for the report
+   */
+  private async generateCategoryMetrics(
+    startTime: number,
+    endTime: number,
+    previousStart?: number,
+    previousEnd?: number
+  ): Promise<{ trading: CategoryMetrics; technology: CategoryMetrics }> {
+    logger.info('[AGGREGATOR] Generating category-specific metrics');
+
+    if (!this.persistenceService) {
+      logger.error('[AGGREGATOR] Persistence service not available for category metrics');
+      return {
+        trading: this.createEmptyCategoryMetrics(),
+        technology: this.createEmptyCategoryMetrics(),
+      };
+    }
+
+    // Get sentiment data with tweets for the period
+    const sentimentData = await this.persistenceService.getSentimentAnalysisByTimeRange(
+      startTime,
+      endTime
+    );
+
+    const tweets = await this.persistenceService.getTweetsByTimeRange(startTime, endTime);
+    const tweetMap = new Map<string, SocialMediaPost>();
+    for (const tweet of tweets) {
+      tweetMap.set(tweet.id, tweet);
+    }
+
+    // Separate by category
+    const tradingPosts: Array<{ sentiment: ProcessedSentiment; tweet: SocialMediaPost }> = [];
+    const technologyPosts: Array<{ sentiment: ProcessedSentiment; tweet: SocialMediaPost }> = [];
+
+    for (const sentiment of sentimentData) {
+      const tweet = tweetMap.get(sentiment.postId);
+      if (!tweet) continue;
+
+      const category = sentiment.categorization?.category || 'ecosystem';
+      const dataPoint = { sentiment, tweet };
+
+      if (category === 'trading') {
+        tradingPosts.push(dataPoint);
+      } else if (category === 'technology' || category === 'ecosystem') {
+        // Map both 'technology' (legacy) and 'ecosystem' (new) to technology posts
+        technologyPosts.push(dataPoint);
+      } else {
+        // Fallback for any unexpected categories - treat as ecosystem
+        technologyPosts.push(dataPoint);
+      }
+    }
+
+    // Calculate metrics for each category
+    const tradingMetrics = await this.calculateCategoryMetrics(
+      tradingPosts,
+      'trading',
+      previousStart,
+      previousEnd
+    );
+
+    const technologyMetrics = await this.calculateCategoryMetrics(
+      technologyPosts,
+      'technology',
+      previousStart,
+      previousEnd
+    );
+
+    return {
+      trading: tradingMetrics,
+      technology: technologyMetrics,
+    };
+  }
+
+  /**
+   * Calculate metrics for a specific category
+   */
+  private async calculateCategoryMetrics(
+    posts: Array<{ sentiment: ProcessedSentiment; tweet: SocialMediaPost }>,
+    category: ContentCategory,
+    previousStart?: number,
+    previousEnd?: number
+  ): Promise<CategoryMetrics> {
+    if (posts.length === 0) {
+      return this.createEmptyCategoryMetrics();
+    }
+
+    // Calculate average sentiment
+    const sentimentScores = posts.map((p) => p.sentiment.sentiment.score);
+    const avgScore =
+      sentimentScores.reduce((sum, score) => sum + score, 0) / sentimentScores.length;
+    const avgConfidence =
+      posts.reduce((sum, p) => sum + p.sentiment.sentiment.confidence, 0) / posts.length;
+    const avgMagnitude =
+      posts.reduce((sum, p) => sum + p.sentiment.sentiment.magnitude, 0) / posts.length;
+
+    // Deduplicate posts by postId first, keeping the one with highest importance score
+    const postMap = new Map<
+      string,
+      { post: SocialMediaPost; sentiment: ProcessedSentiment; importanceScore: number }
+    >();
+
+    for (const p of posts) {
+      const importanceScore = this.calculatePostImportance(p.sentiment, p.tweet);
+      const existing = postMap.get(p.tweet.id);
+
+      if (!existing || importanceScore > existing.importanceScore) {
+        postMap.set(p.tweet.id, {
+          post: p.tweet,
+          sentiment: p.sentiment,
+          importanceScore,
+        });
+      }
+    }
+
+    // Get deduplicated posts and sort by importance
+    const rankedPosts = Array.from(postMap.values()).sort(
+      (a, b) => b.importanceScore - a.importanceScore
+    );
+
+    const topPositivePosts = rankedPosts
+      .filter((p) => p.sentiment.sentiment.score > 0.1)
+      .slice(0, 3);
+
+    const topNegativePosts = rankedPosts
+      .filter((p) => p.sentiment.sentiment.score < -0.1)
+      .slice(0, 3);
+
+    // Calculate changes from previous period
+    let volumeChange = 0;
+    let sentimentChange = 0;
+
+    if (previousStart && previousEnd && this.persistenceService) {
+      const previousData = await this.persistenceService.getSentimentAnalysisByTimeRange(
+        previousStart,
+        previousEnd
+      );
+
+      const previousCategoryPosts = previousData.filter((d) => {
+        const postCategory = d.categorization?.category || 'ecosystem';
+        // Handle both old and new category names
+        if (category === 'technology') {
+          return postCategory === 'technology' || postCategory === 'ecosystem';
+        }
+        return postCategory === category;
+      });
+
+      if (previousCategoryPosts.length > 0) {
+        volumeChange =
+          ((posts.length - previousCategoryPosts.length) / previousCategoryPosts.length) * 100;
+        const prevAvgSentiment =
+          previousCategoryPosts.reduce((sum, p) => sum + p.sentiment.score, 0) /
+          previousCategoryPosts.length;
+        sentimentChange = avgScore - prevAvgSentiment;
+      }
+    }
+
+    // Get dominant indicators
+    const dominantIndicators = this.extractDominantIndicators(posts, category);
+
+    return {
+      totalVolume: posts.length,
+      averageSentiment: {
+        score: avgScore,
+        confidence: avgConfidence,
+        magnitude: avgMagnitude,
+      },
+      volumeChange,
+      sentimentChange,
+      topPositivePosts,
+      topNegativePosts,
+      dominantIndicators,
+    };
+  }
+
+  /**
+   * Calculate importance score for a post
+   */
+  private calculatePostImportance(sentiment: ProcessedSentiment, tweet: SocialMediaPost): number {
+    const authorInfluence = sentiment.influence.authorInfluence;
+    const sentimentMagnitude = sentiment.sentiment.magnitude;
+    const engagementScore = this.calculateEngagementScore(tweet);
+
+    return authorInfluence * 0.6 + sentimentMagnitude * 0.2 + engagementScore * 0.2;
+  }
+
+  /**
+   * Calculate engagement score from tweet metrics
+   */
+  private calculateEngagementScore(tweet: SocialMediaPost): number {
+    const likes = tweet.metrics.likes || 0;
+    const retweets = tweet.metrics.retweets || 0;
+    const replies = tweet.metrics.replies || 0;
+    const views = tweet.metrics.views || 0;
+
+    const weightedEngagement = likes * 1.0 + retweets * 2.0 + replies * 1.5 + views * 0.01;
+    return Math.min(1.0, Math.log10(weightedEngagement + 1) / 4);
+  }
+
+  /**
+   * Extract dominant topics/themes for a category (replaces indicator extraction)
+   */
+  private extractDominantIndicators(
+    posts: Array<{ sentiment: ProcessedSentiment; tweet: SocialMediaPost }>,
+    category: ContentCategory
+  ): string[] {
+    const topicCounts = new Map<string, number>();
+
+    // Count topic frequency across all posts
+    for (const { sentiment } of posts) {
+      if (!sentiment.topics || sentiment.topics.length === 0) continue;
+
+      for (const topic of sentiment.topics) {
+        // Format topic name for display (e.g., "price_action" -> "price action")
+        const formattedTopic = topic.name.replace(/_/g, ' ').toLowerCase().trim();
+
+        topicCounts.set(formattedTopic, (topicCounts.get(formattedTopic) || 0) + 1);
+      }
+    }
+
+    // Return top 3-5 most common topics as "Key themes"
+    return Array.from(topicCounts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([topic]) => topic);
+  }
+
+  /**
+   * Create empty category metrics
+   */
+  private createEmptyCategoryMetrics(): CategoryMetrics {
+    return {
+      totalVolume: 0,
+      averageSentiment: { score: 0, confidence: 0, magnitude: 0 },
+      volumeChange: 0,
+      sentimentChange: 0,
+      topPositivePosts: [],
+      topNegativePosts: [],
+      dominantIndicators: [],
+    };
   }
 
   /**

@@ -33,7 +33,7 @@ export const topVoicesWeeklyAction: Action = {
       'top accounts',
       'leaderboard',
       'who is talking',
-      'who mentioned'
+      'who mentioned',
     ];
 
     const hasTopVoicesKeyword = topVoicesKeywords.some((keyword) => text.includes(keyword));
@@ -47,7 +47,7 @@ export const topVoicesWeeklyAction: Action = {
       'seven day',
       'last week',
       'past week',
-      'this week'
+      'this week',
     ];
 
     const hasWeeklyKeyword = weeklyKeywords.some((keyword) => text.includes(keyword));
@@ -109,7 +109,7 @@ export const topVoicesWeeklyAction: Action = {
 
       // Format the report based on the context
       let formattedReport: string;
-      
+
       // Use Discord formatting if available, otherwise use table format
       if (callback) {
         formattedReport = topVoicesService.formatReportForDiscord(report, limit);

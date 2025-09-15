@@ -5,6 +5,8 @@ import type {
   ProcessedSentiment,
   ExtractedEntity,
   ExtractedTopic,
+  CategorizedSentiment,
+  ContentCategory,
 } from '../types.ts';
 import type { SentimentPersistenceService } from './persistence.ts';
 import type { SentimentAlertsService } from './sentiment-alerts.ts';
@@ -18,6 +20,7 @@ export class SentimentAnalysisService extends Service {
   capabilityDescription = 'Analyzes sentiment of social media posts and text content';
 
   private watchTerms: string[] = ['ai16z', 'elizaos', 'eliza', '@ai16zdao', '@elizaos'];
+  private ignoredUsernames: Set<string> = new Set();
   private persistenceService: SentimentPersistenceService;
   private alertsService: SentimentAlertsService;
 
@@ -40,6 +43,21 @@ export class SentimentAnalysisService extends Service {
         this.watchTerms = envWatchTerms.split(',').map((term: string) => term.trim().toLowerCase());
       } catch (error) {
         logger.warn('Failed to parse SENTIMENT_WATCH_TERMS, using defaults');
+      }
+    }
+
+    // Load ignored usernames from environment or runtime settings
+    const envIgnoredUsernames =
+      (runtime.getSetting('SENTIMENT_X_USERNAMES_IGNORE') as string) || 
+      process.env.SENTIMENT_X_USERNAMES_IGNORE;
+    if (envIgnoredUsernames) {
+      try {
+        this.ignoredUsernames = new Set(
+          envIgnoredUsernames.split(',').map((username: string) => username.trim().toLowerCase())
+        );
+        logger.info(`[SENTIMENT] Loaded ${this.ignoredUsernames.size} ignored usernames: ${Array.from(this.ignoredUsernames).join(', ')}`);
+      } catch (error) {
+        logger.warn('Failed to parse SENTIMENT_X_USERNAMES_IGNORE, using empty list');
       }
     }
   }
@@ -69,6 +87,12 @@ export class SentimentAnalysisService extends Service {
       `[SENTIMENT_ANALYSIS] Post search attribution: searchTerms=${JSON.stringify(post.searchTerms)}, searchContext=${post.searchContext}, source=${post.attributionSource}`
     );
 
+    // Check if username is in ignore list BEFORE processing
+    if (this.ignoredUsernames.has(post.author.username.toLowerCase())) {
+      logger.info(`[SENTIMENT] Ignoring tweet from blocked user: @${post.author.username}`);
+      return this.createEmptyResult(post, []);
+    }
+
     // Store the tweet first (with deduplication)
     let tweetMemoryId = null;
     if (this.persistenceService) {
@@ -89,66 +113,50 @@ export class SentimentAnalysisService extends Service {
     }
 
     try {
-      let watchTermsFound: string[] = [];
+      // Perform comprehensive analysis with single LLM call
+      const analysis = await this.analyzePostComprehensive(post.content.text);
 
-      // STEP 1: Use search terms as primary attribution (highest priority)
-      if (post.searchTerms && post.searchTerms.length > 0) {
-        watchTermsFound.push(...post.searchTerms);
-        logger.debug(
-          `[SENTIMENT_ANALYSIS] Primary attribution from searchTerms: [${watchTermsFound.join(', ')}]`
-        );
-      } else if (post.searchContext) {
-        // Backward compatibility - use searchContext if searchTerms not available
-        watchTermsFound.push(post.searchContext);
-        logger.debug(
-          `[SENTIMENT_ANALYSIS] Primary attribution from searchContext: [${post.searchContext}]`
-        );
+      // Check if post was classified as spam - if so, skip processing
+      if (analysis.categorization.category === 'spam') {
+        logger.info(`[SENTIMENT] Detected spam/farming post ${post.id}, skipping sentiment storage`);
+        return this.createEmptyResult(post, []);
       }
 
-      // STEP 2: Add secondary attribution via text analysis
-      const textBasedTerms = this.findWatchTerms(post.content.text);
-      if (textBasedTerms.length > 0) {
-        // Add any additional terms found via text analysis that aren't already included
-        const newTerms = textBasedTerms.filter((term) => !watchTermsFound.includes(term));
-        if (newTerms.length > 0) {
-          watchTermsFound.push(...newTerms);
-          logger.debug(
-            `[SENTIMENT_ANALYSIS] Secondary attribution from text analysis: [${newTerms.join(', ')}]`
-          );
-        }
-      }
+      // Use LLM-detected watch terms, fallback to search attribution if needed
+      let watchTermsFound = analysis.watchTerms;
+      let attributionSource: 'llm_analysis' | 'search_terms' | 'search_context' | 'default' =
+        'llm_analysis';
 
-      // STEP 3: Try inference if we still have no attributions
+      // If LLM didn't find any relevant terms, use search attribution as fallback
       if (watchTermsFound.length === 0) {
         logger.debug(
-          `[SENTIMENT_ANALYSIS] No primary or secondary attribution found, attempting inference`
+          `[SENTIMENT_ANALYSIS] LLM found no watch terms for post ${post.id}, using fallback attribution`
         );
-        const inferredTerms = this.inferWatchTermsFromPost(post);
-        if (inferredTerms.length > 0) {
-          watchTermsFound.push(...inferredTerms);
-          logger.debug(`[SENTIMENT_ANALYSIS] Inference attribution: [${inferredTerms.join(', ')}]`);
+
+        if (post.searchTerms && post.searchTerms.length > 0) {
+          watchTermsFound = post.searchTerms;
+          attributionSource = 'search_terms';
+          logger.debug(`[SENTIMENT_ANALYSIS] Using searchTerms: [${watchTermsFound.join(', ')}]`);
+        } else if (post.searchContext) {
+          watchTermsFound = [post.searchContext];
+          attributionSource = 'search_context';
+          logger.debug(`[SENTIMENT_ANALYSIS] Using searchContext: [${watchTermsFound.join(', ')}]`);
         } else {
-          // Last resort: use default term
+          // Last resort: default term (with warning)
           const defaultTerm = this.watchTerms[0] || 'ai16z';
-          watchTermsFound.push(defaultTerm);
-          logger.debug(
-            `[SENTIMENT_ANALYSIS] Fallback attribution to default term: [${defaultTerm}]`
+          watchTermsFound = [defaultTerm];
+          attributionSource = 'default';
+          logger.warn(
+            `[SENTIMENT_ANALYSIS] No attribution available for post ${post.id}, using default: [${defaultTerm}]`
           );
         }
+      } else {
+        logger.debug(`[SENTIMENT_ANALYSIS] LLM found watch terms: [${watchTermsFound.join(', ')}]`);
       }
 
-      // Remove duplicates and clean up
-      watchTermsFound = [...new Set(watchTermsFound.filter((term) => term && term.trim()))];
       logger.debug(
-        `[SENTIMENT_ANALYSIS] Final attribution for post ${post.id}: [${watchTermsFound.join(', ')}]`
+        `[SENTIMENT_ANALYSIS] Comprehensive analysis for post ${post.id}: sentiment=${analysis.sentiment.score.toFixed(3)}, category=${analysis.categorization.category}, watchTerms=[${watchTermsFound.join(', ')}], attributionSource=${attributionSource}`
       );
-
-      // Analyze sentiment using LLM
-      const sentiment = await this.scoreSentiment(post.content.text);
-
-      // Extract entities and topics
-      const entities = await this.extractEntities(post.content.text);
-      const topics = await this.extractTopics(post.content.text);
 
       // Calculate influence metrics
       const influence = this.calculateInfluence(post);
@@ -157,11 +165,12 @@ export class SentimentAnalysisService extends Service {
         postId: post.id,
         platform: post.platform,
         processedAt: Date.now(),
-        sentiment,
-        entities,
-        topics,
+        sentiment: analysis.sentiment,
+        entities: analysis.entities,
+        topics: analysis.topics,
         watchTermsFound,
         influence,
+        categorization: analysis.categorization,
       };
 
       // Store the sentiment analysis results
@@ -262,7 +271,6 @@ export class SentimentAnalysisService extends Service {
     // Enhanced attribution summary with details
     const attributionSummary = new Map<string, number>();
     const multiAttributedPosts = [];
-    let storedInDb = 0;
 
     for (const result of results) {
       if (result.watchTermsFound.length > 1) {
@@ -315,367 +323,239 @@ export class SentimentAnalysisService extends Service {
   }
 
   /**
-   * Uses LLM to score sentiment of text
+   * Comprehensive analysis of post using single LLM call
    */
-  private async scoreSentiment(text: string): Promise<SentimentScore> {
-    const prompt = `Analyze the sentiment of this social media post about ai16z or elizaOS. 
-Provide a detailed sentiment analysis in the following XML format:
+  private async analyzePostComprehensive(text: string): Promise<{
+    sentiment: SentimentScore;
+    entities: ExtractedEntity[];
+    topics: ExtractedTopic[];
+    categorization: CategorizedSentiment;
+    watchTerms: string[];
+  }> {
+    const prompt = `<task>Perform comprehensive sentiment and content analysis of this social media post about ai16z/elizaOS ecosystem.</task>
 
-<sentiment>
-  <score>-1.0 to 1.0</score>
-  <confidence>0.0 to 1.0</confidence>
-  <magnitude>0.0 to 1.0</magnitude>
-  <reasoning>Brief explanation of the sentiment analysis</reasoning>
-</sentiment>
+<instructions>
+# Analyze this post for sentiment, categorization, topics, and key entities with high accuracy.
 
-Text to analyze: "${text}"
+# SENTIMENT ANALYSIS:
+- Score the overall emotional tone from -1.0 (very negative) to +1.0 (very positive)
+- Consider context about ai16z/elizaOS specifically (supportive, critical, curious, etc.)
+- Account for sarcasm, irony, and subtle negativity that might mask true sentiment
+- Distinguish between technical/factual language vs emotional expressions
+- Be aware of community sentiment patterns and crypto-specific language
 
-Consider:
-- Overall emotional tone (positive/negative/neutral)
-- Context about ai16z/elizaOS (supportive, critical, curious, etc.)
-- Sarcasm or irony that might affect true sentiment
-- Technical vs emotional language
-- Community sentiment patterns
+# SENTIMENT SCALE:
+-1.0 to -0.5: Very negative (harsh criticism, anger, disappointment, FUD)
+-0.5 to -0.1: Somewhat negative (mild criticism, skepticism, concerns)
+-0.1 to +0.1: Neutral (informational, questions, factual observations)
++0.1 to +0.5: Somewhat positive (interest, mild enthusiasm, cautious optimism)
++0.5 to +1.0: Very positive (excitement, strong support, praise, bullish sentiment)
 
-Score meanings:
-- -1.0 to -0.5: Very negative (criticism, anger, disappointment)
-- -0.5 to -0.1: Somewhat negative (mild criticism, skepticism)
-- -0.1 to 0.1: Neutral (informational, questions, factual)
-- 0.1 to 0.5: Somewhat positive (interest, mild enthusiasm)
-- 0.5 to 1.0: Very positive (excitement, strong support, praise)
+# MAGNITUDE: How intense/strong the emotional content is regardless of direction (0.0 = bland, 1.0 = very intense)
 
-Confidence: How certain you are about the sentiment classification
-Magnitude: How strong/intense the emotional content is regardless of direction`;
+# CATEGORIZATION:
+Classify posts into one of three categories based on primary focus:
+- trading: trading and speculation aspect on the token price of $AI16Z
+- ecosystem: technical and ecosystem discussions around elizaos ecosystem and open source agent framework  
+- spam: ticker farming, keyword stuffing, or posts that just list multiple tickers without meaningful content about ai16z/elizaOS
+
+## Spam detection guidelines:
+- Look for posts with multiple unrelated tickers (e.g., "$CAMEL $AI16Z $SYRUP $AVAAI #POPE $PI")
+- Posts with no actual discussion about ai16z or elizaOS, just ticker mentions for farming
+- Generic pumping messages with multiple project tags
+- If the post would make sense with ai16z/elizaOS keywords removed, it's likely spam
+- Posts that are clearly farming engagement by listing many tokens
+
+## If post has multiple aspects, choose the category that represents the PRIMARY intent and focus. Choose ONLY one category.
+
+TOPICS: Identify 3-5 specific topics/themes as keywords. Use these topic categories:
+- Trading: price_action, market_prediction, buy_sell_signals, chart_analysis, profit_loss, trading_strategy
+- Ecosystem: development, features, partnerships, adoption, community, governance, integrations, bug_reports, team_updates, technical_discussion
+
+ENTITIES: Extract important people, organizations, products mentioned. Format as "Name:TYPE" where TYPE is PERSON, ORG, PRODUCT, or MISC.
+</instructions>
+
+<input>
+Post text: "${text}"
+</input>
+
+<output>
+Respond using ONLY the XML format below. Do not include any text, thinking, or reasoning before or after this XML block.
+
+<analysis>
+  <sentiment_score>-1.0 to 1.0</sentiment_score>
+  <sentiment_magnitude>0.0 to 1.0</sentiment_magnitude>
+  <category>trading|ecosystem|spam</category>
+  <topics>topic1,topic2,topic3</topics>
+  <entities>Name1:TYPE,Name2:TYPE,Name3:TYPE</entities>
+  <reasoning>Brief explanation of sentiment and categorization</reasoning>
+</analysis>
+</output>`;
 
     try {
       const response = await this.runtime.useModel(ModelType.TEXT_SMALL, {
         prompt,
-        max_tokens: 200,
-        temperature: 0.1, // Low temperature for consistent analysis
+        max_tokens: 500,
+        temperature: 0.1,
       });
 
-      return this.parseSentimentResponse(response);
+      return this.parseComprehensiveResponse(response, text);
     } catch (error) {
-      logger.error('Error getting sentiment from LLM:', error);
-      return {
-        score: 0,
-        confidence: 0,
-        magnitude: 0,
-      };
+      logger.error('Error in comprehensive post analysis:', error);
+      return this.createEmptyAnalysisResult();
     }
   }
 
   /**
-   * Parse LLM response into sentiment score object
+   * Parse comprehensive LLM response into all analysis components
    */
-  private parseSentimentResponse(response: unknown): SentimentScore {
-    try {
-      const responseStr = String(response);
-      // Extract values using regex patterns
-      const scoreMatch = responseStr.match(/<score>([-+]?\d*\.?\d+)<\/score>/);
-      const confidenceMatch = responseStr.match(/<confidence>(\d*\.?\d+)<\/confidence>/);
-      const magnitudeMatch = responseStr.match(/<magnitude>(\d*\.?\d+)<\/magnitude>/);
-
-      const score = scoreMatch ? parseFloat(scoreMatch[1]) : 0;
-      const confidence = confidenceMatch ? parseFloat(confidenceMatch[1]) : 0;
-      const magnitude = magnitudeMatch ? parseFloat(magnitudeMatch[1]) : 0;
-
-      // Validate and clamp values
-      return {
-        score: Math.max(-1, Math.min(1, score)),
-        confidence: Math.max(0, Math.min(1, confidence)),
-        magnitude: Math.max(0, Math.min(1, magnitude)),
-      };
-    } catch (error) {
-      logger.error('Error parsing sentiment response:', error);
-      return { score: 0, confidence: 0, magnitude: 0 };
-    }
-  }
-
-  /**
-   * Extract entities from text using LLM
-   */
-  private async extractEntities(text: string): Promise<ExtractedEntity[]> {
-    const prompt = `Extract key entities from this social media post about ai16z/elizaOS.
-Focus on important people, organizations, products, and concepts mentioned.
-
-Provide response in XML format:
-<entities>
-  <entity>
-    <text>entity name</text>
-    <type>PERSON|ORG|PRODUCT|LOCATION|MISC</type>
-    <relevance>0.0 to 1.0</relevance>
-  </entity>
-</entities>
-
-Text: "${text}"
-
-Guidelines:
-- Only extract entities relevant to ai16z/elizaOS ecosystem
-- Include people (developers, influencers, team members)
-- Include organizations and projects
-- Include product names and technical terms
-- Rate relevance based on importance to the ai16z/elizaOS narrative
-- Maximum 5 most important entities`;
-
-    try {
-      const response = await this.runtime.useModel(ModelType.TEXT_SMALL, {
-        prompt,
-        max_tokens: 300,
-        temperature: 0.2,
-      });
-
-      return await this.parseEntitiesResponse(response, text);
-    } catch (error) {
-      logger.error('Error extracting entities:', error);
-      return [];
-    }
-  }
-
-  /**
-   * Parse entities response from LLM
-   */
-  private async parseEntitiesResponse(
+  private parseComprehensiveResponse(
     response: unknown,
-    originalText: string
-  ): Promise<ExtractedEntity[]> {
-    const entities: ExtractedEntity[] = [];
-
+    _originalText: string
+  ): {
+    sentiment: SentimentScore;
+    entities: ExtractedEntity[];
+    topics: ExtractedTopic[];
+    categorization: CategorizedSentiment;
+    watchTerms: string[];
+  } {
     try {
       const responseStr = String(response);
-      // Find all entity blocks
-      const entityPattern = /<entity>[\s\S]*?<\/entity>/g;
-      const entityMatches = responseStr.match(entityPattern);
 
-      if (!entityMatches) return entities;
+      // Parse sentiment (simplified - no confidence)
+      const sentimentScore = this.extractFloatValue(responseStr, 'sentiment_score', 0, -1, 1);
+      const sentimentMagnitude = this.extractFloatValue(
+        responseStr,
+        'sentiment_magnitude',
+        0.5,
+        0,
+        1
+      );
 
-      for (const entityMatch of entityMatches) {
-        const textMatch = entityMatch.match(/<text>(.*?)<\/text>/);
-        const typeMatch = entityMatch.match(/<type>(.*?)<\/type>/);
-        const relevanceMatch = entityMatch.match(/<relevance>(.*?)<\/relevance>/);
+      const sentiment: SentimentScore = {
+        score: sentimentScore,
+        confidence: 0.8, // Default confidence since we removed the field
+        magnitude: sentimentMagnitude,
+      };
 
-        if (textMatch && typeMatch) {
-          const entityText = textMatch[1].trim();
-          const entityType = typeMatch[1].trim() as ExtractedEntity['type'];
-          const relevance = relevanceMatch ? parseFloat(relevanceMatch[1]) : 0.5;
+      // Parse category (trading, ecosystem, or spam)
+      const categoryStr = this.extractStringValue(
+        responseStr,
+        'category',
+        'ecosystem'
+      ).toLowerCase();
+      
+      const category = categoryStr as ContentCategory | 'spam';
 
-          // Get sentiment for this specific entity context
-          const entitySentiment = await this.getEntitySentiment(entityText, originalText);
+      // Create categorization with indicators derived from topics
+      const topicsStr = this.extractStringValue(responseStr, 'topics', '');
+      const topicNames = topicsStr
+        ? topicsStr
+          .split(',')
+          .map((t) => t.trim().toLowerCase())
+          .filter((t) => t)
+        : [];
 
-          entities.push({
-            text: entityText,
-            type: entityType,
-            relevance: Math.max(0, Math.min(1, relevance)),
-            sentiment: entitySentiment,
-          });
+      // Simple categorization - let topics speak for themselves
+      const categorization: CategorizedSentiment = {
+        category,
+        categoryConfidence: 0.8,
+        // Indicators are now optional - reports use topics directly
+      };
+
+      // Create structured topics
+      const topics: ExtractedTopic[] = topicNames.map((name) => ({
+        name,
+        keywords: [name],
+        relevance: 0.8,
+        frequency: 1,
+      }));
+
+      // Parse entities
+      const entitiesStr = this.extractStringValue(responseStr, 'entities', '');
+      const entities: ExtractedEntity[] = [];
+      if (entitiesStr) {
+        const entityPairs = entitiesStr.split(',');
+        for (const pair of entityPairs) {
+          const [text, type] = pair.split(':').map((s) => s.trim());
+          if (text && type) {
+            entities.push({
+              text,
+              type: (type.toUpperCase() as ExtractedEntity['type']) || 'MISC',
+              relevance: 0.8,
+              sentiment: { score: 0, confidence: 0.5, magnitude: 0.3 },
+            });
+          }
         }
       }
-    } catch (error) {
-      logger.error('Error parsing entities response:', error);
-    }
 
-    return entities.slice(0, 5); // Limit to top 5 entities
+      // No watch terms needed since API already filters
+      const watchTerms: string[] = [];
+
+      return {
+        sentiment,
+        entities,
+        topics,
+        categorization,
+        watchTerms,
+      };
+    } catch (error) {
+      logger.error('Error parsing comprehensive response:', error);
+      return this.createEmptyAnalysisResult();
+    }
   }
 
   /**
-   * Get sentiment specifically for how an entity is mentioned
+   * Helper to extract float values from XML response
    */
-  private async getEntitySentiment(entity: string, fullText: string): Promise<SentimentScore> {
-    // For now, return neutral sentiment - could be enhanced with more specific analysis
+  private extractFloatValue(
+    response: string | unknown,
+    tag: string,
+    defaultValue: number,
+    min?: number,
+    max?: number
+  ): number {
+    const responseStr = String(response);
+    const match = responseStr.match(new RegExp(`<${tag}>([-+]?\\d*\\.?\\d+)<\\/${tag}>`));
+    let value = match ? parseFloat(match[1]) : defaultValue;
+    if (min !== undefined) value = Math.max(min, value);
+    if (max !== undefined) value = Math.min(max, value);
+    return value;
+  }
+
+  /**
+   * Helper to extract string values from XML response
+   */
+  private extractStringValue(
+    response: string | unknown,
+    tag: string,
+    defaultValue: string
+  ): string {
+    const responseStr = String(response);
+    const match = responseStr.match(new RegExp(`<${tag}>(.*?)<\\/${tag}>`));
+    return match ? match[1].trim() : defaultValue;
+  }
+
+  /**
+   * Create empty analysis result for error cases
+   */
+  private createEmptyAnalysisResult(): {
+    sentiment: SentimentScore;
+    entities: ExtractedEntity[];
+    topics: ExtractedTopic[];
+    categorization: CategorizedSentiment;
+    watchTerms: string[];
+  } {
     return {
-      score: 0,
-      confidence: 0.5,
-      magnitude: 0.3,
+      sentiment: { score: 0, confidence: 0, magnitude: 0 },
+      entities: [],
+      topics: [],
+      categorization: {
+        category: 'ecosystem',
+        categoryConfidence: 0.5,
+      },
+      watchTerms: [],
     };
-  }
-
-  /**
-   * Extract topics from text using LLM
-   */
-  private async extractTopics(text: string): Promise<ExtractedTopic[]> {
-    const prompt = `Identify key topics and themes in this social media post about ai16z/elizaOS.
-
-Provide response in XML format:
-<topics>
-  <topic>
-    <name>topic name</name>
-    <keywords>keyword1,keyword2,keyword3</keywords>
-    <relevance>0.0 to 1.0</relevance>
-  </topic>
-</topics>
-
-Text: "${text}"
-
-Focus on:
-- Technical topics (development, features, updates)
-- Business topics (partnerships, funding, adoption)
-- Community topics (events, discussions, sentiment)
-- Product topics (use cases, comparisons, reviews)
-- Market topics (price, trading, speculation)
-
-Rate relevance based on how central the topic is to the post's main message.
-Maximum 3 most important topics.`;
-
-    try {
-      const response = await this.runtime.useModel(ModelType.TEXT_SMALL, {
-        prompt,
-        max_tokens: 250,
-        temperature: 0.3,
-      });
-
-      return this.parseTopicsResponse(response);
-    } catch (error) {
-      logger.error('Error extracting topics:', error);
-      return [];
-    }
-  }
-
-  /**
-   * Parse topics response from LLM
-   */
-  private parseTopicsResponse(response: unknown): ExtractedTopic[] {
-    const topics: ExtractedTopic[] = [];
-
-    try {
-      const responseStr = String(response);
-      const topicPattern = /<topic>[\s\S]*?<\/topic>/g;
-      const topicMatches = responseStr.match(topicPattern);
-
-      if (!topicMatches) return topics;
-
-      for (const topicMatch of topicMatches) {
-        const nameMatch = topicMatch.match(/<name>(.*?)<\/name>/);
-        const keywordsMatch = topicMatch.match(/<keywords>(.*?)<\/keywords>/);
-        const relevanceMatch = topicMatch.match(/<relevance>(.*?)<\/relevance>/);
-
-        if (nameMatch) {
-          const name = nameMatch[1].trim();
-          const keywordStr = keywordsMatch ? keywordsMatch[1].trim() : '';
-          const keywords = keywordStr ? keywordStr.split(',').map((k) => k.trim()) : [];
-          const relevance = relevanceMatch ? parseFloat(relevanceMatch[1]) : 0.5;
-
-          topics.push({
-            name,
-            keywords,
-            relevance: Math.max(0, Math.min(1, relevance)),
-            frequency: 1, // Will be calculated properly during aggregation
-          });
-        }
-      }
-    } catch (error) {
-      logger.error('Error parsing topics response:', error);
-    }
-
-    return topics.slice(0, 3); // Limit to top 3 topics
-  }
-
-  /**
-   * Find watch terms in text with enhanced matching for case variations and common patterns
-   */
-  private findWatchTerms(text: string): string[] {
-    const lowerText = text.toLowerCase();
-    const matchedTerms: string[] = [];
-
-    for (const term of this.watchTerms) {
-      const termLower = term.toLowerCase();
-
-      // Direct match (existing logic)
-      if (lowerText.includes(termLower)) {
-        matchedTerms.push(term);
-        continue;
-      }
-
-      // Enhanced matching for common variations
-      const variations = this.generateTermVariations(termLower);
-      for (const variation of variations) {
-        if (lowerText.includes(variation)) {
-          matchedTerms.push(term);
-          break; // Only add the term once
-        }
-      }
-    }
-
-    return [...new Set(matchedTerms)]; // Remove duplicates
-  }
-
-  /**
-   * Generate common variations of a watch term for better matching
-   */
-  private generateTermVariations(term: string): string[] {
-    const variations = [term]; // Include the original term
-
-    // Add hashtag and ticker symbol versions
-    variations.push(`#${term}`);
-    variations.push(`$${term}`);
-    variations.push(`@${term}`);
-
-    // Add case variations if not all lowercase
-    if (term !== term.toLowerCase()) {
-      variations.push(term.toUpperCase());
-      variations.push(term.charAt(0).toUpperCase() + term.slice(1).toLowerCase());
-    }
-
-    // Add common patterns for specific terms
-    if (term === 'elizaos') {
-      variations.push('eliza os', 'eliza-os', 'elizaOS', 'ElizaOS', 'ELIZAOS');
-    }
-
-    if (term === 'ai16z') {
-      variations.push('AI16Z', 'ai16z', 'AI16z');
-    }
-
-    // Add space-separated version for compound terms
-    if (term.length > 4 && !term.includes(' ')) {
-      // Try to split camelCase or add spaces
-      const spaced = term.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
-      if (spaced !== term) {
-        variations.push(spaced);
-      }
-    }
-
-    return variations;
-  }
-
-  /**
-   * Infer watch terms from post context (URL, hashtags, etc.)
-   * Used when exact text matching fails but the post was fetched via search
-   */
-  private inferWatchTermsFromPost(post: SocialMediaPost): string[] {
-    const inferredTerms: string[] = [];
-
-    // Check URL for watch terms
-    if (post.content.url) {
-      const lowerUrl = post.content.url.toLowerCase();
-      for (const term of this.watchTerms) {
-        if (lowerUrl.includes(term.toLowerCase())) {
-          inferredTerms.push(term);
-        }
-      }
-    }
-
-    // Check author username for watch terms
-    const lowerUsername = post.author.username.toLowerCase();
-    for (const term of this.watchTerms) {
-      if (lowerUsername.includes(term.toLowerCase())) {
-        inferredTerms.push(term);
-      }
-    }
-
-    // Look for partial matches or variations
-    const lowerText = post.content.text.toLowerCase();
-    for (const term of this.watchTerms) {
-      const termLower = term.toLowerCase();
-      // Check for hashtag versions
-      if (lowerText.includes(`#${termLower}`) || lowerText.includes(`$${termLower}`)) {
-        inferredTerms.push(term);
-      }
-      // Check for partial matches (e.g., "ai16" matching "ai16z")
-      if (termLower.length > 3 && lowerText.includes(termLower.slice(0, -1))) {
-        inferredTerms.push(term);
-      }
-    }
-
-    return [...new Set(inferredTerms)]; // Remove duplicates
   }
 
   /**

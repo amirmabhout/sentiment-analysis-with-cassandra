@@ -13,6 +13,7 @@ import {
   SentimentAlertsService,
   DiscordReportingService,
   TopVoicesService,
+  ReportGenerationService,
 } from './services/index.ts';
 
 export * from './types.ts';
@@ -54,6 +55,7 @@ export const sentimentAnalyzerPlugin: Plugin = {
     TwitterDataService, // Unified Twitter data service (official API preferred, RapidAPI fallback)
     SentimentAggregatorService,
     TopVoicesService, // Top voices aggregation and reporting
+    ReportGenerationService, // Unified report generation and formatting service
   ],
 
   // Actions that users can trigger
@@ -66,12 +68,7 @@ export const sentimentAnalyzerPlugin: Plugin = {
   ],
 
   // Providers that supply context to conversations
-  providers: [
-    providers.sentimentDataProvider,
-    providers.sentimentTrendsProvider,
-    providers.topSentimentTweetsProvider,
-    providers.actionsProvider,
-  ],
+  providers: [providers.actionsProvider],
 
   // Initialize the plugin
   async init(config: Record<string, string>): Promise<void> {
@@ -96,11 +93,12 @@ export const sentimentAnalyzerPlugin: Plugin = {
     }
 
     // Validate Twitter API configuration - Check for either official or RapidAPI
-    const hasOfficialTwitter = 
-      (config.TWITTER_BEARER_TOKEN || process.env.TWITTER_BEARER_TOKEN) ||
-      ((config.TWITTER_API_KEY || process.env.TWITTER_API_KEY) && 
-       (config.TWITTER_API_SECRET_KEY || process.env.TWITTER_API_SECRET_KEY));
-       
+    const hasOfficialTwitter =
+      config.TWITTER_BEARER_TOKEN ||
+      process.env.TWITTER_BEARER_TOKEN ||
+      ((config.TWITTER_API_KEY || process.env.TWITTER_API_KEY) &&
+        (config.TWITTER_API_SECRET_KEY || process.env.TWITTER_API_SECRET_KEY));
+
     const hasRapidApiKey = config.RAPIDAPI_API_KEY || process.env.RAPIDAPI_API_KEY;
     const hasRapidApiHost = config.RAPIDAPI_X_HOST || process.env.RAPIDAPI_X_HOST;
     const hasRapidAPI = hasRapidApiKey && hasRapidApiHost;
@@ -149,6 +147,9 @@ export const sentimentAnalyzerPlugin: Plugin = {
         config.SENTIMENT_BOOTSTRAP_MODE || process.env.SENTIMENT_BOOTSTRAP_MODE || 'auto', // auto-detect first run
       SENTIMENT_DEV_TIME_WINDOW:
         config.SENTIMENT_DEV_TIME_WINDOW || process.env.SENTIMENT_DEV_TIME_WINDOW || '21600000', // 6 hours in ms for dev mode
+      // Username filtering (optional)
+      SENTIMENT_X_USERNAMES_IGNORE:
+        config.SENTIMENT_X_USERNAMES_IGNORE || process.env.SENTIMENT_X_USERNAMES_IGNORE || '',
     };
 
     // Set environment variables for services to use

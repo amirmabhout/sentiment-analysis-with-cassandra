@@ -18,6 +18,7 @@ A framework for multi-agent development and deployment
 **READ THIS FIRST**: This software can be configured to use third-party Twitter data services that may violate Twitter's Terms of Service. Users are responsible for ensuring compliance with all applicable terms and policies. Consider using official Twitter API for production use.
 
 ### Prerequisites & Legal Considerations
+
 - Ensure you have proper API access and authorization
 - Review Twitter's Developer Agreement if using Twitter data
 - Understand the legal implications of your intended use case
@@ -65,7 +66,9 @@ Cassandra leverages the sentiment analyzer plugin to provide:
 ### API Keys Required
 
 #### Official Twitter/X API (Recommended for Production)
+
 For compliance with Twitter/X Terms of Service, consider using their official API:
+
 ```bash
 # Official Twitter API v2
 TWITTER_BEARER_TOKEN=your_official_twitter_token
@@ -74,6 +77,7 @@ TWITTER_API_SECRET_KEY=your_twitter_api_secret_key
 ```
 
 #### Alternative: Third-Party Services (Use at Your Own Risk)
+
 ```bash
 # RapidAPI (Third-party service - may violate Twitter ToS)
 RAPIDAPI_API_KEY=your_rapidapi_key
@@ -83,6 +87,7 @@ RAPIDAPI_X_HOST=your_rapidapi_host
 **⚠️ Warning**: Using third-party Twitter data services may violate Twitter's Terms of Service and could result in your Twitter account being suspended.
 
 #### LLM Provider (Required)
+
 ```bash
 # Choose one
 OPENAI_API_KEY=your_openai_key
@@ -91,6 +96,7 @@ OPENAI_API_KEY=your_openai_key
 ```
 
 #### Optional Integration
+
 ```bash
 # Discord Bot (optional, for reporting)
 DISCORD_API_TOKEN=your_discord_bot_token
@@ -113,20 +119,24 @@ Ask Cassandra for insights:
 **IMPORTANT: Please read before using this software.**
 
 ### Third-Party API Usage
+
 This software is designed to work with third-party Twitter/X data providers (such as RapidAPI services). **The use of such services may violate Twitter/X's Terms of Service.**
 
 ### User Responsibility
+
 - **You are solely responsible** for ensuring compliance with all applicable Terms of Service, including Twitter/X's Developer Agreement and Terms of Service
 - **You are responsible** for obtaining proper API access and following rate limits
 - **This software is provided for educational and research purposes**
 - The maintainers of this repository do not endorse or encourage violation of any platform's Terms of Service
 
 ### Legal Compliance
+
 - Users must comply with all applicable laws and regulations in their jurisdiction
 - Users must respect platform rate limits, user privacy, and content policies
 - Users should consider using official Twitter/X API services for production use
 
 ### No Warranty
+
 This software is provided "AS IS" without warranty of any kind. The maintainers are not responsible for any consequences resulting from the use of this software.
 
 By using this software, you acknowledge that you understand and accept these terms.
@@ -134,18 +144,22 @@ By using this software, you acknowledge that you understand and accept these ter
 ## 📋 Compliance and Best Practices
 
 ### Recommended Usage
+
 - **Research and Educational Purposes**: This tool is ideal for academic research, personal learning, and educational projects
 - **Small-Scale Monitoring**: Suitable for monitoring specific keywords for personal or small business use
 - **Prototype Development**: Perfect for building proof-of-concepts before moving to official APIs
 
 ### Production Usage Recommendations
+
 For production applications, we strongly recommend:
+
 1. Using Twitter's official API v2
 2. Applying for appropriate access levels through Twitter Developer Portal
 3. Implementing proper rate limiting and data handling
 4. Following Twitter's Developer Agreement and Policy
 
 ### Data Handling
+
 - Respect user privacy and data protection regulations (GDPR, CCPA, etc.)
 - Implement appropriate data retention policies
 - Secure API keys and sensitive data
