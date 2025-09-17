@@ -26,24 +26,20 @@ export const reportDailyTask = {
     const startTime = Date.now();
 
     try {
-      // Check if we should run the daily report (at midnight and not run today)
+      // Check if 24 hours have passed since the last report
       const now = new Date();
       const lastReportTime = task?.metadata?.lastDailyReportTime || 0;
-      const lastReportDate = new Date(lastReportTime);
+      const timeSinceLastReport = startTime - lastReportTime;
+      const twentyFourHours = 24 * 60 * 60 * 1000;
 
-      // Check if it's midnight hour (between 00:00 and 01:00)
-      const isMidnight = now.getHours() === 0;
-
-      // Check if we haven't run today yet
-      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      const lastReportToday = lastReportDate >= today;
-
-      if (!isMidnight || lastReportToday) {
-        // Not midnight time or already ran today, skip silently
+      if (timeSinceLastReport < twentyFourHours) {
+        // Less than 24 hours since last report, skip silently
+        const hoursRemaining = ((twentyFourHours - timeSinceLastReport) / 1000 / 60 / 60).toFixed(1);
+        logger.debug(`[ReportDaily] Skipping - next report in ${hoursRemaining} hours`);
         return;
       }
 
-      logger.info('[ReportDaily] Starting comprehensive daily report generation at midnight');
+      logger.info('[ReportDaily] Starting comprehensive daily report generation (24h interval)');
 
       // Get required services
       const sentimentService = runtime.getService('sentiment-analysis');

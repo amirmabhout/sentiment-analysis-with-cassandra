@@ -25,26 +25,20 @@ export const reportWeeklyTopVoicesTask = {
     const startTime = Date.now();
 
     try {
+      // Check if 7 days have passed since the last report
       const now = new Date();
       const lastReportTime = task?.metadata?.lastWeeklyReportTime || 0;
-      const lastReportDate = new Date(lastReportTime);
+      const timeSinceLastReport = startTime - lastReportTime;
+      const sevenDays = 7 * 24 * 60 * 60 * 1000;
 
-      // Check if today is Sunday (day 0)
-      const isSunday = now.getDay() === 0;
-
-      // Check if we haven't run this week yet
-      const thisWeekStart = new Date(now);
-      thisWeekStart.setDate(now.getDate() - now.getDay()); // Start of this week (Sunday)
-      thisWeekStart.setHours(0, 0, 0, 0);
-      
-      const lastReportThisWeek = lastReportDate >= thisWeekStart;
-
-      if (!isSunday || lastReportThisWeek) {
-        // Not Sunday or already ran this week, skip silently
+      if (timeSinceLastReport < sevenDays) {
+        // Less than 7 days since last report, skip silently
+        const daysRemaining = ((sevenDays - timeSinceLastReport) / 1000 / 60 / 60 / 24).toFixed(1);
+        logger.debug(`[ReportWeeklyTopVoices] Skipping - next report in ${daysRemaining} days`);
         return;
       }
 
-      logger.info('[ReportWeeklyTopVoices] Starting weekly top voices report generation on Sunday');
+      logger.info('[ReportWeeklyTopVoices] Starting weekly top voices report generation (7-day interval)');
 
       // Get required services
       const topVoicesService = runtime.getService('top-voices') as TopVoicesService;
@@ -114,58 +108,32 @@ export const reportWeeklyTopVoicesTask = {
       // Send weekly report to Discord if service is available
       if (discordReportingService && discordReportingService.isAvailable()) {
         try {
-          // Discord has a 2000 character limit, so we might need to split
-          const maxLength = 1900; // Leave some margin
-          if (weeklyReportText.length > maxLength) {
-            // Split into multiple messages
-            const parts = [];
-            let currentPart = '';
-            const lines = weeklyReportText.split('\n');
-            
-            for (const line of lines) {
-              if ((currentPart + line + '\n').length > maxLength && currentPart) {
-                parts.push(currentPart);
-                currentPart = line + '\n';
-              } else {
-                currentPart += line + '\n';
-              }
-            }
-            if (currentPart) parts.push(currentPart);
-
-            // Send each part
-            for (let i = 0; i < parts.length; i++) {
-              const partHeader = parts.length > 1 ? `**[Part ${i + 1}/${parts.length}]**\n\n` : '';
-              await runtime.sendMessageToTarget(
-                {
-                  source: 'discord',
-                  channelId: process.env.DISCORD_REPORT_CHANNEL,
-                },
-                {
-                  text: partHeader + parts[i],
-                }
-              );
-              
-              // Small delay between parts to avoid rate limiting
-              if (i < parts.length - 1) {
-                await new Promise(resolve => setTimeout(resolve, 1000));
-              }
-            }
-          } else {
-            // Send as single message
-            await runtime.sendMessageToTarget(
-              {
-                source: 'discord',
-                channelId: process.env.DISCORD_REPORT_CHANNEL,
-              },
-              {
-                text: weeklyReportText,
-              }
-            );
-          }
-          
+          // Use the Discord reporting service for consistent channel handling
+          await (discordReportingService as any).sendGenericReport(weeklyReportText);
           logger.info('[ReportWeeklyTopVoices] Successfully sent weekly top voices Discord report');
         } catch (error) {
           logger.error('[ReportWeeklyTopVoices] Failed to send weekly Discord report:', error);
+          
+          // Fallback to direct sending if needed
+          try {
+            const channelId = process.env.DISCORD_REPORT_CHANNEL || process.env.CHANNEL_IDS?.split(',')[0];
+            if (channelId) {
+              await runtime.sendMessageToTarget(
+                {
+                  source: 'discord',
+                  channelId: channelId.trim(),
+                },
+                {
+                  text: weeklyReportText,
+                }
+              );
+              logger.info('[ReportWeeklyTopVoices] Sent report via fallback method');
+            } else {
+              logger.warn('[ReportWeeklyTopVoices] No Discord channel configured for reports');
+            }
+          } catch (fallbackError) {
+            logger.error('[ReportWeeklyTopVoices] Fallback sending also failed:', fallbackError);
+          }
         }
       } else {
         logger.warn('[ReportWeeklyTopVoices] Discord reporting service not available or not configured');

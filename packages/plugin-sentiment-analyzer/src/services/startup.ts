@@ -3,6 +3,7 @@ import {
   sentimentProcessingTask,
   report6hTask,
   reportDailyTask,
+  reportDailyTopVoicesTask,
   reportWeeklyTopVoicesTask,
   trendAnalysisTask,
 } from '../tasks/index.ts';
@@ -37,6 +38,7 @@ export class StartupService extends Service {
       this.runtime.registerTaskWorker(sentimentProcessingTask);
       this.runtime.registerTaskWorker(report6hTask);
       this.runtime.registerTaskWorker(reportDailyTask);
+      this.runtime.registerTaskWorker(reportDailyTopVoicesTask);
       this.runtime.registerTaskWorker(reportWeeklyTopVoicesTask);
       this.runtime.registerTaskWorker(trendAnalysisTask);
 
@@ -44,6 +46,7 @@ export class StartupService extends Service {
       const existingMainTask = await this.runtime.getTasksByName('SENTIMENT_PROCESSING_TASK');
       const existingReport6hTask = await this.runtime.getTasksByName('SENTIMENT_REPORT_6H_TASK');
       const existingDailyReportTask = await this.runtime.getTasksByName('SENTIMENT_REPORT_DAILY_TASK');
+      const existingDailyTopVoicesTask = await this.runtime.getTasksByName('REPORT_DAILY_TOP_VOICES_TASK');
       const existingWeeklyTopVoicesTask = await this.runtime.getTasksByName('REPORT_WEEKLY_TOP_VOICES_TASK');
       const existingTrendTask = await this.runtime.getTasksByName('SENTIMENT_TREND_ANALYSIS_TASK');
 
@@ -133,11 +136,11 @@ export class StartupService extends Service {
         logger.info('✅ Created 6-hour sentiment reporting task');
       }
 
-      // Create comprehensive daily reporting task (at midnight)
+      // Create comprehensive daily reporting task (24h interval)
       if (existingDailyReportTask.length === 0) {
         await this.runtime.createTask({
           name: 'SENTIMENT_REPORT_DAILY_TASK',
-          description: 'Generate comprehensive daily sentiment and top voices reports at midnight',
+          description: 'Generate comprehensive daily sentiment and top voices reports every 24 hours',
           worldId: this.runtime.worldId || '00000000-0000-0000-0000-000000000000',
           roomId: this.runtime.agentId,
           metadata: {
@@ -148,25 +151,43 @@ export class StartupService extends Service {
           tags: ['queue', 'repeat', 'sentiment', 'daily', 'reporting', 'comprehensive'],
         });
 
-        logger.info('✅ Created comprehensive daily reporting task (midnight)');
+        logger.info('✅ Created comprehensive daily reporting task (24h interval)');
       }
 
-      // Create weekly top voices reporting task (every Sunday)
-      if (existingWeeklyTopVoicesTask.length === 0) {
+      // Create dedicated daily top voices reporting task (24h interval)
+      if (existingDailyTopVoicesTask.length === 0) {
         await this.runtime.createTask({
-          name: 'REPORT_WEEKLY_TOP_VOICES_TASK',
-          description: 'Generate comprehensive weekly top voices leaderboard every Sunday',
+          name: 'REPORT_DAILY_TOP_VOICES_TASK',
+          description: 'Generate dedicated daily top voices leaderboard every 24 hours',
           worldId: this.runtime.worldId || '00000000-0000-0000-0000-000000000000',
           roomId: this.runtime.agentId,
           metadata: {
             updatedAt: Date.now(),
             updateInterval: 60000, // Check every 1 minute
-            lastWeeklyReportTime: 0,
+            lastDailyTopVoicesReportTime: Date.now() - 22 * 60 * 60 * 1000, // Offset by 22 hours to stagger with main daily report
+          },
+          tags: ['queue', 'repeat', 'top-voices', 'daily', 'reporting'],
+        });
+
+        logger.info('✅ Created dedicated daily top voices reporting task (24h interval)');
+      }
+
+      // Create weekly top voices reporting task (7-day interval)
+      if (existingWeeklyTopVoicesTask.length === 0) {
+        await this.runtime.createTask({
+          name: 'REPORT_WEEKLY_TOP_VOICES_TASK',
+          description: 'Generate comprehensive weekly top voices leaderboard every 7 days',
+          worldId: this.runtime.worldId || '00000000-0000-0000-0000-000000000000',
+          roomId: this.runtime.agentId,
+          metadata: {
+            updatedAt: Date.now(),
+            updateInterval: 60000, // Check every 1 minute
+            lastWeeklyReportTime: Date.now() - 6 * 24 * 60 * 60 * 1000, // Offset by 6 days for initial run
           },
           tags: ['queue', 'repeat', 'top-voices', 'weekly', 'reporting'],
         });
 
-        logger.info('✅ Created weekly top voices reporting task (Sunday)');
+        logger.info('✅ Created weekly top voices reporting task (7-day interval)');
       }
 
       // Create trend analysis task (every 24 hours)
@@ -190,8 +211,9 @@ export class StartupService extends Service {
       logger.info('🎯 All sentiment analysis tasks configured successfully:');
       logger.info('   • Sentiment processing (dynamic intervals)');
       logger.info('   • 6-hour detailed reports');
-      logger.info('   • Daily comprehensive reports (midnight)');
-      logger.info('   • Weekly top voices leaderboard (Sunday)');
+      logger.info('   • Daily comprehensive reports (24h intervals)');
+      logger.info('   • Daily top voices leaderboard (24h intervals)');
+      logger.info('   • Weekly top voices leaderboard (7-day intervals)');
       logger.info('   • Weekly trend analysis (24h intervals)');
     } catch (error) {
       logger.error('❌ Error setting up sentiment analysis tasks:', error);

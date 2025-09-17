@@ -65,6 +65,8 @@ export const sentimentAnalyzerPlugin: Plugin = {
     actions.searchTweetsAction,
     actions.topVoicesDailyAction,
     actions.topVoicesWeeklyAction,
+    actions.topVoicesCabalDailyAction,
+    actions.topVoicesCabalWeeklyAction,
   ],
 
   // Providers that supply context to conversations

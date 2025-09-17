@@ -38,12 +38,18 @@ export class DiscordReportingService extends Service {
         .filter((id) => id.length > 0);
     }
 
+    // Fallback to DISCORD_REPORT_CHANNEL if CHANNEL_IDS not set
+    if (this.channelIds.length === 0 && process.env.DISCORD_REPORT_CHANNEL) {
+      this.channelIds = [process.env.DISCORD_REPORT_CHANNEL.trim()];
+      logger.info('[DiscordReporting] Using DISCORD_REPORT_CHANNEL as fallback');
+    }
+
     logger.info(
       `[DiscordReporting] Configuration loaded: ${this.channelIds.length} channels configured`
     );
 
     if (this.channelIds.length === 0) {
-      logger.warn('[DiscordReporting] No CHANNEL_IDS configured - reports will not be sent');
+      logger.warn('[DiscordReporting] No CHANNEL_IDS or DISCORD_REPORT_CHANNEL configured - reports will not be sent');
     }
   }
 
@@ -51,6 +57,87 @@ export class DiscordReportingService extends Service {
     logger.info(
       '[DiscordReporting] Discord Reporting Service initialized - using runtime.sendMessageToTarget'
     );
+  }
+
+  /**
+   * Send a generic text report to all configured Discord channels
+   */
+  async sendGenericReport(text: string): Promise<boolean> {
+    if (this.channelIds.length === 0) {
+      logger.warn('[DiscordReporting] No channels configured');
+      return false;
+    }
+
+    let successCount = 0;
+    
+    // Split long messages if needed
+    const messages = this.splitLongMessage(text);
+
+    for (const channelId of this.channelIds) {
+      try {
+        for (let i = 0; i < messages.length; i++) {
+          const messageText = messages.length > 1 
+            ? `**[Part ${i + 1}/${messages.length}]**\n\n${messages[i]}`
+            : messages[i];
+            
+          await this.runtime.sendMessageToTarget(
+            {
+              source: 'discord',
+              channelId: channelId,
+            },
+            {
+              text: messageText,
+            }
+          );
+          
+          // Small delay between parts to avoid rate limiting
+          if (i < messages.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        }
+        
+        successCount++;
+        logger.info(`[DiscordReporting] Generic report sent to channel ${channelId}`);
+      } catch (error) {
+        logger.error(
+          `[DiscordReporting] Failed to send generic report to channel ${channelId}:`,
+          error
+        );
+      }
+    }
+
+    logger.info(
+      `[DiscordReporting] Generic report sent to ${successCount}/${this.channelIds.length} channels`
+    );
+    return successCount > 0;
+  }
+
+  /**
+   * Split a long message into Discord-sized chunks
+   */
+  private splitLongMessage(text: string, maxLength: number = 1900): string[] {
+    if (text.length <= maxLength) {
+      return [text];
+    }
+
+    const parts: string[] = [];
+    let currentPart = '';
+    const lines = text.split('\n');
+
+    for (const line of lines) {
+      if ((currentPart + line + '\n').length > maxLength && currentPart) {
+        parts.push(currentPart.trim());
+        currentPart = line + '\n';
+      } else {
+        currentPart += line + '\n';
+      }
+    }
+    
+    if (currentPart) {
+      parts.push(currentPart.trim());
+    }
+
+    return parts;
   }
 
   /**
@@ -70,12 +157,17 @@ export class DiscordReportingService extends Service {
     let formattedReport: string;
     if (reportGenerationService && topTweets) {
       // Use new enhanced formatting that includes top tweets
+      logger.info(
+        `[DiscordReporting] Using enhanced formatting with ${topTweets.positiveTweets?.length || 0} positive and ${topTweets.negativeTweets?.length || 0} negative tweets`
+      );
       formattedReport = reportGenerationService.formatReportWithTopTweets(report, topTweets);
     } else if (reportGenerationService) {
       // Standard formatting without top tweets
+      logger.info('[DiscordReporting] Using standard formatting without top tweets');
       formattedReport = reportGenerationService.formatReportForDiscord(report);
     } else {
       // Legacy fallback
+      logger.warn('[DiscordReporting] Using legacy formatting fallback');
       formattedReport = this.formatDetailedReportForDiscord(report, topTweets);
     }
     let successCount = 0;

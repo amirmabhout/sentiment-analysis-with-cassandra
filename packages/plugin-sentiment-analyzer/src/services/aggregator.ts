@@ -355,6 +355,7 @@ export class SentimentAggregatorService extends Service {
     // Separate by category
     const tradingPosts: Array<{ sentiment: ProcessedSentiment; tweet: SocialMediaPost }> = [];
     const technologyPosts: Array<{ sentiment: ProcessedSentiment; tweet: SocialMediaPost }> = [];
+    let spamCount = 0;
 
     for (const sentiment of sentimentData) {
       const tweet = tweetMap.get(sentiment.postId);
@@ -368,11 +369,18 @@ export class SentimentAggregatorService extends Service {
       } else if (category === 'technology' || category === 'ecosystem') {
         // Map both 'technology' (legacy) and 'ecosystem' (new) to technology posts
         technologyPosts.push(dataPoint);
+      } else if (category === 'spam') {
+        // Don't include spam in category metrics
+        spamCount++;
       } else {
         // Fallback for any unexpected categories - treat as ecosystem
         technologyPosts.push(dataPoint);
       }
     }
+
+    logger.info(
+      `[AGGREGATOR] Category distribution: ${tradingPosts.length} trading, ${technologyPosts.length} technology/ecosystem, ${spamCount} spam`
+    );
 
     // Calculate metrics for each category
     const tradingMetrics = await this.calculateCategoryMetrics(
@@ -442,11 +450,11 @@ export class SentimentAggregatorService extends Service {
     );
 
     const topPositivePosts = rankedPosts
-      .filter((p) => p.sentiment.sentiment.score > 0.1)
+      .filter((p) => p.sentiment.sentiment.score > 0.05)
       .slice(0, 3);
 
     const topNegativePosts = rankedPosts
-      .filter((p) => p.sentiment.sentiment.score < -0.1)
+      .filter((p) => p.sentiment.sentiment.score < -0.05)
       .slice(0, 3);
 
     // Calculate changes from previous period

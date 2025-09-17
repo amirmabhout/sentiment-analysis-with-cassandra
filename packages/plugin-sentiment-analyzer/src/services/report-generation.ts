@@ -3,6 +3,7 @@ import type { SentimentReport, SocialMediaPost, ProcessedSentiment, TopVoice } f
 import type { SentimentAggregatorService } from './aggregator.ts';
 import type { TopVoicesService } from './top-voices.ts';
 import type { SentimentPersistenceService } from './persistence.ts';
+import { formatUsernameWithCabal } from '../utils/cabal.ts';
 
 /**
  * Unified Report Generation Service
@@ -105,6 +106,7 @@ export class ReportGenerationService extends Service {
     negativeTweets: Array<{ post: SocialMediaPost; sentiment: ProcessedSentiment }>;
   }> {
     if (!this.persistenceService) {
+      logger.warn('[ReportGeneration] No persistence service available for top tweets');
       return { positiveTweets: [], negativeTweets: [] };
     }
 
@@ -117,6 +119,10 @@ export class ReportGenerationService extends Service {
       endTime
     );
     const tweets = await this.persistenceService.getTweetsByTimeRange(startTime, endTime);
+    
+    logger.info(
+      `[ReportGeneration] Fetched ${sentimentData.length} sentiment records and ${tweets.length} tweets for top tweets`
+    );
 
     // Create tweet map for fast lookup
     const tweetMap = new Map<string, SocialMediaPost>();
@@ -142,16 +148,20 @@ export class ReportGenerationService extends Service {
     // Sort by importance score
     combinedData.sort((a, b) => b.importanceScore - a.importanceScore);
 
-    // Get top positive and negative tweets
+    // Get top positive and negative tweets with more inclusive thresholds
     const positiveTweets = combinedData
-      .filter((item) => item.sentiment.sentiment.score > 0.1)
+      .filter((item) => item.sentiment.sentiment.score > 0.05)
       .slice(0, limit)
       .map(({ post, sentiment }) => ({ post, sentiment }));
 
     const negativeTweets = combinedData
-      .filter((item) => item.sentiment.sentiment.score < -0.1)
+      .filter((item) => item.sentiment.sentiment.score < -0.05)
       .slice(0, limit)
       .map(({ post, sentiment }) => ({ post, sentiment }));
+
+    logger.info(
+      `[ReportGeneration] Found ${positiveTweets.length} positive and ${negativeTweets.length} negative top tweets`
+    );
 
     return { positiveTweets, negativeTweets };
   }
@@ -255,7 +265,8 @@ export class ReportGenerationService extends Service {
         const voice = report.topVoices[i];
         const rank = i + 1;
         const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : `${rank}.`;
-        formatted += `${medal} **@${voice.username}** - ${voice.mentionCount} mentions`;
+        const formattedUsername = formatUsernameWithCabal(voice.username, true);
+        formatted += `${medal} **${formattedUsername}** - ${voice.mentionCount} mentions`;
         if (voice.followerCount) {
           formatted += ` • ${this.formatFollowerCount(voice.followerCount)} followers`;
         }
@@ -345,7 +356,7 @@ export class ReportGenerationService extends Service {
     index: number
   ): string {
     const { post: tweet, sentiment } = rankedTweet;
-    const author = `@${tweet.author.username}`;
+    const author = formatUsernameWithCabal(tweet.author.username, true);
     const followers = this.formatFollowerCount(tweet.author.followerCount || 0);
     const sentimentScore = sentiment.sentiment.score > 0 ? '+' : '';
     const importance = rankedTweet.importanceScore

@@ -2,6 +2,7 @@ import { Service, type IAgentRuntime, logger } from '@elizaos/core';
 import { v4 } from 'uuid';
 import type { TopVoice, TopVoicesReport, SocialMediaPost, ProcessedSentiment } from '../types.ts';
 import type { SentimentPersistenceService } from './persistence.ts';
+import { formatUsernameWithCabal, filterCabalMembers, getCabalUsernames } from '../utils/cabal.ts';
 
 /**
  * Service for aggregating and reporting on top voices (most mentioned authors)
@@ -207,7 +208,8 @@ export class TopVoicesService extends Service {
       const rank = i + 1;
       const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : `${rank}.`;
 
-      formatted += `${medal} **@${voice.username}**`;
+      const formattedUsername = formatUsernameWithCabal(voice.username, true);
+      formatted += `${medal} **${formattedUsername}**`;
 
       if (voice.name) {
         formatted += ` (${voice.name})`;
@@ -257,7 +259,8 @@ export class TopVoicesService extends Service {
     for (let i = 0; i < voices.length; i++) {
       const voice = voices[i];
       const rank = (i + 1).toString().padEnd(4);
-      const username = voice.username.padEnd(20).substring(0, 20);
+      const formattedUsername = formatUsernameWithCabal(voice.username, false);
+      const username = formattedUsername.padEnd(25).substring(0, 25);
       const mentions = voice.mentionCount.toString().padEnd(8);
       const followers = voice.followerCount
         ? this.formatFollowerCount(voice.followerCount).padEnd(10)
@@ -325,5 +328,101 @@ export class TopVoicesService extends Service {
     if (score > -0.2) return 'Neutral';
     if (score > -0.5) return 'Negative';
     return 'Very Negative';
+  }
+
+  /**
+   * Generate a CABAL-only top voices report for a given time period
+   */
+  async generateCabalTopVoicesReport(hours: number, limit: number = 50): Promise<TopVoicesReport> {
+    const endTime = Date.now();
+    const startTime = endTime - hours * 60 * 60 * 1000;
+    const label =
+      hours === 24 ? 'Last 24 hours' : hours === 168 ? 'Last 7 days' : `Last ${hours} hours`;
+
+    logger.info(`[TOP_VOICES_CABAL] Generating CABAL top voices report for ${label}`);
+
+    // Get the full report first
+    const fullReport = await this.generateTopVoicesReport(hours, 1000); // Get more voices to filter
+
+    // Filter to only CABAL members
+    const cabalVoices = filterCabalMembers(fullReport.topVoices);
+    const cabalUsernames = getCabalUsernames();
+
+    // Calculate CABAL-specific stats
+    const totalCabalMembers = cabalUsernames.size;
+    const activeCabalMembers = cabalVoices.length;
+    const totalCabalMentions = cabalVoices.reduce((sum, voice) => sum + voice.mentionCount, 0);
+
+    // Create CABAL-only report
+    const cabalReport: TopVoicesReport = {
+      ...fullReport,
+      topVoices: cabalVoices.slice(0, limit),
+      totalUniqueAuthors: activeCabalMembers,
+      totalMentions: totalCabalMentions,
+    };
+
+    logger.info(
+      `[TOP_VOICES_CABAL] Generated CABAL report with ${cabalVoices.length} active members out of ${totalCabalMembers} total CABAL members`
+    );
+
+    return cabalReport;
+  }
+
+  /**
+   * Format CABAL top voices report for Discord
+   */
+  formatCabalReportForDiscord(report: TopVoicesReport, limit?: number): string {
+    const displayLimit = limit || report.topVoices.length;
+    const voices = report.topVoices.slice(0, displayLimit);
+    const cabalUsernames = getCabalUsernames();
+
+    let formatted = `👥 **CABAL Top Voices Report - ${report.timeframe.label}**\n\n`;
+    formatted += `**CABAL Overview:**\n`;
+    formatted += `• Total CABAL members: **${cabalUsernames.size}**\n`;
+    formatted += `• Active CABAL members: **${report.totalUniqueAuthors}**\n`;
+    formatted += `• Total mentions from CABAL: **${report.totalMentions}**\n\n`;
+
+    if (voices.length === 0) {
+      formatted += `*No CABAL members were active during this period*\n`;
+      return formatted;
+    }
+
+    formatted += `**CABAL Rankings:**\n`;
+
+    for (let i = 0; i < voices.length; i++) {
+      const voice = voices[i];
+      const rank = i + 1;
+      const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : `${rank}.`;
+
+      // CABAL members always get stars in CABAL-only reports
+      formatted += `${medal} ⭐ **@${voice.username}** ⭐`;
+
+      if (voice.name) {
+        formatted += ` (${voice.name})`;
+      }
+
+      formatted += ` - ${voice.mentionCount} mention${voice.mentionCount !== 1 ? 's' : ''}`;
+
+      if (voice.followerCount) {
+        formatted += ` • ${this.formatFollowerCount(voice.followerCount)} followers`;
+      }
+
+      if (voice.averageSentiment) {
+        const emoji = this.getSentimentEmoji(voice.averageSentiment.score);
+        formatted += ` ${emoji}`;
+      }
+
+      formatted += '\n';
+
+      // Add sample tweet URLs if available (show up to 2 recent tweets)
+      if ((voice as any).sampleTweetUrls && (voice as any).sampleTweetUrls.length > 0) {
+        const urlsToShow = (voice as any).sampleTweetUrls.slice(0, 2);
+        for (let j = 0; j < urlsToShow.length; j++) {
+          formatted += `   └ [Recent Tweet ${j + 1}](${urlsToShow[j]})\n`;
+        }
+      }
+    }
+
+    return formatted;
   }
 }
