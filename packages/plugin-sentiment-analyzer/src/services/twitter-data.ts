@@ -34,7 +34,6 @@ export class TwitterDataService extends Service {
   private rapidApiKey: string = '';
   private rapidApiHost: string = 'twitter241.p.rapidapi.com';
   private rapidApiAppName: string = '';
-  private lastCursor: string | null = null;
 
   // Cache refresh tracking
   private lastCacheRefresh: number = 0;
@@ -232,7 +231,6 @@ export class TwitterDataService extends Service {
           },
           {} as Record<string, number>
         ),
-        cursorUsed: this.dataProvider === 'rapidapi' && this.lastCursor !== null,
       };
 
       this.lastFetchTimestamp = Date.now();
@@ -443,9 +441,7 @@ export class TwitterDataService extends Service {
       query: term,
     });
 
-    if (this.lastCursor) {
-      params.append('cursor', this.lastCursor);
-    }
+    // No cursor - always fetch latest tweets for real-time sentiment monitoring
 
     const headers = {
       'x-rapidapi-key': this.rapidApiKey,
@@ -473,11 +469,7 @@ export class TwitterDataService extends Service {
       `RapidAPI response received - hasCursor: ${!!data.cursor}, hasResult: ${!!data.result}, hasTimeline: ${!!data.result?.timeline}`
     );
 
-    if (data.cursor?.bottom) {
-      this.lastCursor = data.cursor.bottom;
-      logger.debug(`Updated cursor: ${this.lastCursor}`);
-    }
-
+    // No cursor management - always fetch latest tweets
     // Reuse the existing RapidAPI transformation logic
     return this.transformRapidAPIResponse(data, term, cutoffTimestamp);
   }
@@ -1005,7 +997,6 @@ export class TwitterDataService extends Service {
   clearProcessedTweets(): void {
     this.processedTweetIds.clear();
     this.lastFetchTimestamp = 0;
-    this.lastCursor = null;
-    logger.info('Cleared processed tweet cache and cursor');
+    logger.info('Cleared processed tweet cache');
   }
 }

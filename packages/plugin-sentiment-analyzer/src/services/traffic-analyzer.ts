@@ -13,7 +13,6 @@ export interface FetchStatistics {
   newestTweetTime?: number;
   processingTimeMs: number;
   watchTermsFound: Record<string, number>;
-  cursorUsed: boolean;
 }
 
 /**

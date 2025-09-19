@@ -148,14 +148,14 @@ export class ReportGenerationService extends Service {
     // Sort by importance score
     combinedData.sort((a, b) => b.importanceScore - a.importanceScore);
 
-    // Get top positive and negative tweets with more inclusive thresholds
+    // Get top positive and negative tweets (no thresholds - always show top 5)
     const positiveTweets = combinedData
-      .filter((item) => item.sentiment.sentiment.score > 0.05)
+      .filter((item) => item.sentiment.sentiment.score > 0)
       .slice(0, limit)
       .map(({ post, sentiment }) => ({ post, sentiment }));
 
     const negativeTweets = combinedData
-      .filter((item) => item.sentiment.sentiment.score < -0.05)
+      .filter((item) => item.sentiment.sentiment.score < 0)
       .slice(0, limit)
       .map(({ post, sentiment }) => ({ post, sentiment }));
 
