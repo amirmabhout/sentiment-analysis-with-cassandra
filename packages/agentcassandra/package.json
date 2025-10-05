@@ -27,14 +27,14 @@
     "dist"
   ],
   "dependencies": {
-    "@elizaos/cli": "latest",
+    "@elizaos/cli": "workspace:*",
     "@elizaos/core": "workspace:*",
     "@elizaos/plugin-bootstrap": "workspace:*",
     "@elizaos/plugin-twitter": "latest",
-    "@elizaos/plugin-discord": "latest",
+    "@elizaos/plugin-discord": "1.2.5",
     "@elizaos/plugin-google-genai": "latest",
     "@elizaos/plugin-sentiment-analyzer": "workspace:*",
-    "@elizaos/plugin-sql": "latest",
+    "@elizaos/plugin-sql": "workspace:*",
     "@elizaos/plugin-telegram": "latest",
     "@tanstack/react-query": "^5.29.0",
     "clsx": "^2.1.1",

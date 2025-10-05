@@ -36,7 +36,7 @@ export class StartupService extends Service {
     try {
       // Register task workers
       this.runtime.registerTaskWorker(sentimentProcessingTask);
-      this.runtime.registerTaskWorker(report6hTask);
+      // this.runtime.registerTaskWorker(report6hTask);  // DISABLED: 6h report task temporarily disabled
       this.runtime.registerTaskWorker(reportDailyTask);
       this.runtime.registerTaskWorker(reportDailyTopVoicesTask);
       this.runtime.registerTaskWorker(reportWeeklyTopVoicesTask);
@@ -119,6 +119,8 @@ export class StartupService extends Service {
       }
 
       // Create 6-hour reporting task (every 6 hours)
+      // DISABLED: 6h report task temporarily disabled
+      /*
       if (existingReport6hTask.length === 0) {
         await this.runtime.createTask({
           name: 'SENTIMENT_REPORT_6H_TASK',
@@ -135,6 +137,7 @@ export class StartupService extends Service {
 
         logger.info('✅ Created 6-hour sentiment reporting task');
       }
+      */
 
       // Create comprehensive daily reporting task (24h interval)
       if (existingDailyReportTask.length === 0) {
@@ -210,7 +213,7 @@ export class StartupService extends Service {
 
       logger.info('🎯 All sentiment analysis tasks configured successfully:');
       logger.info('   • Sentiment processing (dynamic intervals)');
-      logger.info('   • 6-hour detailed reports');
+      // logger.info('   • 6-hour detailed reports'); // DISABLED temporarily
       logger.info('   • Daily comprehensive reports (24h intervals)');
       logger.info('   • Daily top voices leaderboard (24h intervals)');
       logger.info('   • Weekly top voices leaderboard (7-day intervals)');
