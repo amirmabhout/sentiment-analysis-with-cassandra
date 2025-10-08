@@ -38,7 +38,7 @@ export class StartupService extends Service {
       this.runtime.registerTaskWorker(sentimentProcessingTask);
       // this.runtime.registerTaskWorker(report6hTask);  // DISABLED: 6h report task temporarily disabled
       this.runtime.registerTaskWorker(reportDailyTask);
-      this.runtime.registerTaskWorker(reportDailyTopVoicesTask);
+      // this.runtime.registerTaskWorker(reportDailyTopVoicesTask);  // DISABLED: 24h top voices daily report task disabled
       this.runtime.registerTaskWorker(reportWeeklyTopVoicesTask);
       this.runtime.registerTaskWorker(trendAnalysisTask);
 
@@ -158,6 +158,8 @@ export class StartupService extends Service {
       }
 
       // Create dedicated daily top voices reporting task (24h interval)
+      // DISABLED: 24h top voices daily report task disabled
+      /*
       if (existingDailyTopVoicesTask.length === 0) {
         await this.runtime.createTask({
           name: 'REPORT_DAILY_TOP_VOICES_TASK',
@@ -174,6 +176,7 @@ export class StartupService extends Service {
 
         logger.info('✅ Created dedicated daily top voices reporting task (24h interval)');
       }
+      */
 
       // Create weekly top voices reporting task (7-day interval)
       if (existingWeeklyTopVoicesTask.length === 0) {
@@ -215,7 +218,7 @@ export class StartupService extends Service {
       logger.info('   • Sentiment processing (dynamic intervals)');
       // logger.info('   • 6-hour detailed reports'); // DISABLED temporarily
       logger.info('   • Daily comprehensive reports (24h intervals)');
-      logger.info('   • Daily top voices leaderboard (24h intervals)');
+      // logger.info('   • Daily top voices leaderboard (24h intervals)'); // DISABLED
       logger.info('   • Weekly top voices leaderboard (7-day intervals)');
       logger.info('   • Weekly trend analysis (24h intervals)');
     } catch (error) {
